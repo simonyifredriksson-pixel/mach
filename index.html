@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>[MACH] — Speed Is Damage</title>
+<meta name="description" content="A high-speed 3D katana PvP game. The faster you move, the more damage you deal — and the harder you are to control. DAMAGE = SPEED x 0.5.">
+<meta name="theme-color" content="#0d0e12">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Barlow+Condensed:wght@400;600;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles/main.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' fill='%230d0e12'/><path d='M7 25 L25 7' stroke='%23f2c511' stroke-width='3'/><path d='M7 25 L11 21' stroke='%23e23a2e' stroke-width='5'/></svg>">
+</head>
+<body>
+
+<canvas id="view"></canvas>
+<div id="ui"></div>
+
+<div id="loading">
+  <div class="load-logo">[MA<span>CH</span>]</div>
+  <div class="load-tag">Speed is damage</div>
+  <div class="load-track"><div id="load-bar"></div></div>
+  <div id="load-text">STARTING</div>
+</div>
+
+<script type="module" src="src/main.js"></script>
+<noscript>
+  <div style="position:fixed;inset:0;display:grid;place-items:center;background:#07080a;color:#f3f4f6;font-family:sans-serif">
+    [MACH] needs JavaScript and WebGL.
+  </div>
+</noscript>
+</body>
+</html>

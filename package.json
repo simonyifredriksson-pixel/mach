@@ -1,0 +1,17 @@
+{
+  "name": "mach",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "[MACH] — a high-speed 3D katana PvP game. DAMAGE = SPEED x 0.5.",
+  "scripts": {
+    "server": "node server/server.js",
+    "serve": "node -e \"import('node:http').then(async({default:http})=>{const fs=await import('node:fs');const path=await import('node:path');const T={'.html':'text/html','.js':'text/javascript','.css':'text/css','.json':'application/json','.svg':'image/svg+xml'};http.createServer((q,s)=>{let f=path.join(process.cwd(),decodeURIComponent(q.url.split('?')[0]));if(f.endsWith(path.sep))f+='index.html';if(!fs.existsSync(f)||fs.statSync(f).isDirectory())f=path.join(f,'index.html');try{s.writeHead(200,{'Content-Type':T[path.extname(f)]||'application/octet-stream'});s.end(fs.readFileSync(f));}catch(e){s.writeHead(404);s.end('404');}}).listen(8080,()=>console.log('http://localhost:8080'));})\""
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
