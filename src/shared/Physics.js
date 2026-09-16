@@ -206,6 +206,13 @@ export function raycast(world, ox, oy, oz, dx, dy, dz, maxDist) {
     const far = Math.min(t1, u1, v1);
     if (near > far || near >= best) continue;
 
+    // Which slab produced the entry? That face is the surface normal, and
+    // wall-running lives or dies on having a real one.
+    let nx = 0, ny = 0, nz = 0;
+    if (near === t0) nx = dx > 0 ? -1 : 1;
+    else if (near === u0) ny = dy > 0 ? -1 : 1;
+    else nz = dz > 0 ? -1 : 1;
+
     if (o.t === SHAPE.RAMP) {
       // Only accept the ramp if the ray is actually above its sloped surface
       // at the entry point, so hooks do not catch on the empty wedge.
@@ -218,7 +225,8 @@ export function raycast(world, ox, oy, oz, dx, dy, dz, maxDist) {
     hit = {
       x: ox + dx * near, y: oy + dy * near, z: oz + dz * near,
       dist: near, kind: o.k, solid: ids[i],
-      normalY: Math.abs(u0 - near) < 1e-4 ? 1 : 0,
+      nx, ny, nz, normalY: ny !== 0 ? 1 : 0,
+      top: o.y1, bottom: o.y0,
     };
   }
 
@@ -241,7 +249,9 @@ export function raycast(world, ox, oy, oz, dx, dy, dz, maxDist) {
           best = hi;
           hit = {
             x: ox + dx * hi, y: oy + dy * hi, z: oz + dz * hi,
-            dist: hi, kind: 'terrain', solid: -1, normalY: 1,
+            dist: hi, kind: 'terrain', solid: -1,
+            nx: 0, ny: 1, nz: 0, normalY: 1,
+            top: oy + dy * hi, bottom: -1e4,
           };
         }
         break;

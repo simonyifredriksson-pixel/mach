@@ -34,6 +34,9 @@ export function makeMoveState() {
     wasGrounded: true,
     landImpact: 0,
     airTime: 0,
+    // Parkour writes these each tick; movement reads them and resets nothing.
+    gravityScale: 1,
+    slopeGain: CFG.SLOPE_GAIN,
     mods: { turn: 1, accel: 1, friction: 1 },
   };
 }
@@ -134,8 +137,9 @@ export function stepPlayer(p, input, world, dt, ev) {
   if (p.grounded) {
     const slopeMag = Math.hypot(p.groundNX || 0, p.groundNZ || 0);
     if (slopeMag > 0.02) {
-      vx += (p.groundNX || 0) * CFG.GRAVITY * CFG.SLOPE_GAIN * dt;
-      vz += (p.groundNZ || 0) * CFG.GRAVITY * CFG.SLOPE_GAIN * dt;
+      const gain = p.slopeGain ?? CFG.SLOPE_GAIN;
+      vx += (p.groundNX || 0) * CFG.GRAVITY * gain * dt;
+      vz += (p.groundNZ || 0) * CFG.GRAVITY * gain * dt;
     }
   }
 
@@ -158,7 +162,7 @@ export function stepPlayer(p, input, world, dt, ev) {
     p.jumpBuffer = 0;
     if (ev) ev.jumped = true;
   }
-  if (!p.grounded) p.vel.y -= CFG.GRAVITY * dt;
+  if (!p.grounded) p.vel.y -= CFG.GRAVITY * (p.gravityScale ?? 1) * dt;
 
   /* ----------------------------------------------------------- integrate */
   const R = CFG.PLAYER_RADIUS, H = CFG.PLAYER_HEIGHT, STEP = CFG.STEP_HEIGHT;

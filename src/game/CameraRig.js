@@ -81,6 +81,16 @@ export class CameraRig {
   grappleHook() { this.fovKick += 3.2; this.distKick += 7; }
   grappleRelease() { this.fovKick += 4.5; }
 
+  /** Parkour responses — punchy but tiny, and all of them decay to zero. */
+  wallEnter() { this.fovKick += 1.6; this.distKick += 3; }
+  wallKick(speed) {
+    const t = clamp01(speed / CFG.MAX_SPEED);
+    this.fovKick += 2.4 + t * 3.0;
+    this.distKick += 5;
+    this.landVel -= 1.4;                    // a small upward lurch
+  }
+  slideStart() { this.distKick += 4; this.landVel -= 2.2; }
+
   /**
    * HIGH-SPEED HIT IMPACT.
    *
@@ -206,10 +216,15 @@ export class CameraRig {
       if (this.impactT === 0) this.impactAmp = 0;
     }
 
-    /* ---- bank into carves + roll toward the rope while swinging ---- */
+    /* ---- bank: carves, rope, and the wall ---- */
+    // The wall tilt is the signature of a good wall-run camera: the horizon
+    // rolls toward the surface you are running on, and rolls back off it.
+    // Held to 13 degrees, eased over ~200 ms, so it reads without disorienting.
+    const wallTilt = (opts.wallSide || 0) * -0.23;
     const bankTarget = clamp((opts.turnRate || 0) * -0.30, -0.10, 0.10) * (0.35 + t)
-      + (grappling ? clamp((opts.ropeSide || 0) * 0.06, -0.06, 0.06) : 0);
-    this.roll = damp(this.roll, bankTarget, 4.5, dt);
+      + (grappling ? clamp((opts.ropeSide || 0) * 0.06, -0.06, 0.06) : 0)
+      + wallTilt;
+    this.roll = damp(this.roll, bankTarget, opts.wallSide ? 6.5 : 4.5, dt);
 
     const ry = yaw + shakeYaw;
     const rp = clamp(pitch + shakePitch, -1.05, 0.9);

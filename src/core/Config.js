@@ -93,6 +93,46 @@ export const CFG = {
   HIT_SPEED_LOSS: 0.22,    // victim sheds this fraction of speed on impact
   HIT_KNOCK: 55,           // + a shove along the blade direction
 
+  /* ------------------------------------------------------------- parkour */
+  // Wall movement exists to keep momentum alive. Every number here is chosen so
+  // that the fastest line through a space is a parkour line, not a straight one
+  // — and so that nothing ever RESETS your speed, it only redirects it.
+  WALL_PROBE: 16,            // how far out the shoulder rays look
+  WALLRUN_MIN_SPEED: 145,    // below this a wall is just a wall
+  WALLRUN_EXIT_SPEED: 95,
+  WALLRUN_MAX_TIME: 2.3,
+  WALLRUN_GRAV_START: 0.14,  // gravity scale at attach...
+  WALLRUN_GRAV_END: 0.95,    // ...and by the time your run is spent
+  WALLRUN_GRAV_RAMP: 1.5,    // seconds to travel between the two
+  WALLRUN_ENTRY_UP: 82,      // small pop on attach so it reads as a launch
+  WALLRUN_STICK: 210,        // inward hold, in u/s^2
+  WALLRUN_ACCEL: 520,        // you can still gain speed along a wall
+  WALLRUN_ALIGN: 0.30,       // max rad between velocity and wall to attach
+  WALLRUN_REATTACH_TIME: 0.45,
+
+  WALLKICK_UP: 232,
+  WALLKICK_OUT: 205,
+  WALLKICK_KEEP: 1.04,       // along-wall momentum is kept and nudged up
+  WALLKICK_BUFFER: 0.14,
+
+  WALLCLIMB_MAX_TIME: 0.55,  // straight up a wall you hit head-on
+  WALLCLIMB_ACCEL: 1250,
+  WALLCLIMB_MIN_SPEED: 120,
+  WALLCLIMB_COST: 0.55,      // horizontal speed converted into height
+
+  VAULT_MAX_RISE: 46,        // ledges up to this high are flowed over, not hit
+  VAULT_MIN_SPEED: 70,
+  VAULT_CLEAR: 22,
+  VAULT_COOLDOWN: 0.3,
+
+  SLIDE_MIN_SPEED: 150,
+  SLIDE_ENTRY_BOOST: 1.07,
+  SLIDE_FRICTION: 0.11,      // multiplier on normal ground friction
+  SLIDE_TURN: 0.42,
+  SLIDE_SLOPE_GAIN: 2.1,     // downhill slides really pick up
+  SLIDE_MIN_TIME: 0.18,
+  SLIDE_HOP_UP: 1.0,         // jumping out of a slide keeps everything
+
   /* ------------------------------------------------------ grappling hook */
   // The hook is a real object that travels, catches, and reels. It never
   // teleports you: every unit of the pull is integrated through the same

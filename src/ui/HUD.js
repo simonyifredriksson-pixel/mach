@@ -40,6 +40,9 @@ export class HUD {
     const foot = EL('div', 'hud-speed-foot', sb);
     EL('span', 'dim', foot, 'MAX');
     EL('span', 'hud-max', foot, String(CFG.MAX_SPEED));
+    // Names the technique you are currently in. Teaches the movement system by
+    // simply telling you what you just did.
+    this.moveState = EL('div', 'hud-move', sb, '');
 
     /* ------------------------------------------------------ damage block */
     const db = EL('div', 'hud-damage', this.root);
@@ -188,6 +191,14 @@ export class HUD {
       const f = this.killFeed[i];
       f.t -= dt;
       if (f.t <= 0) { f.el.classList.add('gone'); this.killFeed.splice(i, 1); }
+    }
+
+    // Current technique.
+    const ms = st.moveState || '';
+    if (ms !== this._moveState) {
+      this._moveState = ms;
+      this.moveState.textContent = ms;
+      this.moveState.className = 'hud-move' + (ms ? ' on' : '');
     }
 
     // Grapple readiness: the tag lights the moment an anchor is in your sights,

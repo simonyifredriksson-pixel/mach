@@ -309,6 +309,11 @@ export class Menu extends Emitter {
 }
 
 const TIPS = [
+  'TIP: Jump alongside a wall to wall-run. Jump again to kick off it — you keep the whole run.',
+  'TIP: Run straight at a wall in the air and hold forward: you will climb it. Height costs speed.',
+  'TIP: CTRL slides. Downhill it accelerates, flat it coasts, and hopping out of one loses nothing.',
+  'TIP: Low ledges vault automatically. You are never meant to stop moving.',
+  'TIP: Sprint, jump, wall-run, kick, grapple, release. One line, one unbroken velocity.',
   'TIP: Press G to grapple. Release with G again — you keep every unit of momentum you built.',
   'TIP: Sprint, jump, grapple a roof, release at the top of the arc. That is the whole game.',
   'TIP: The G on your reticle lights up when something in front of you can be hooked.',

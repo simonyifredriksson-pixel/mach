@@ -16,6 +16,7 @@ import { Emitter, clamp, damp, lerp, angleLerp } from '../core/Util.js';
 import { makeMoveState, stepPlayer } from '../shared/Movement.js';
 import { makeCombatState, stepCombat, WSTATE } from '../shared/Combat.js';
 import { makeGrappleState, stepGrapplePre, stepGrapplePost, GSTATE } from '../shared/Grapple.js';
+import { makeParkourState, stepParkourPre, stepParkourPost, PSTATE } from '../shared/Parkour.js';
 import { S2C } from '../net/Protocol.js';
 
 const MAX_PENDING = 120;
@@ -50,6 +51,8 @@ export class GameState extends Emitter {
       move: makeMoveState(),
       combat: makeCombatState(),
       grapple: makeGrappleState(),
+      parkour: makeParkourState(),
+      simTime: 0,
       yaw: 0, pitch: 0,
       hp: CFG.MAX_HEALTH, alive: true, protect: false,
       lastHitAt: -99, lastHurtAt: -99, vulnerable: false,
@@ -76,6 +79,16 @@ export class GameState extends Emitter {
       if (ev.draw) this.emit('localDraw', {});
       if (ev.sheathe) this.emit('localSheathe', {});
 
+      s.simTime += dt;
+      stepParkourPre(s.parkour, s.move, cmd, this.world, dt, s.simTime,
+        s.grapple.state === GSTATE.ATTACHED);
+      const pk = s.parkour;
+      if (pk.justWallrun) this.emit('localWall', { climb: pk.state === PSTATE.WALLCLIMB, pk });
+      if (pk.justKick) this.emit('localKick', { pk, speed: s.move.speed });
+      if (pk.justVault) this.emit('localVault', {});
+      if (pk.justSlide) this.emit('localSlide', { speed: s.move.speed });
+      if (pk.justSlideEnd) this.emit('localSlideEnd', {});
+
       const firedBefore = s.grapple.fired;
       stepGrapplePre(s.grapple, s.move, cmd, this.world, dt, s.yaw, s.pitch);
       if (s.grapple.state === GSTATE.ATTACHED) {
@@ -89,6 +102,7 @@ export class GameState extends Emitter {
       const mev = { jumped: false, landed: false, landSpeed: 0 };
       stepPlayer(s.move, cmd, this.world, dt, mev);
       stepGrapplePost(s.grapple, s.move);
+      stepParkourPost(s.parkour, s.move, s.simTime);
 
       if (s.grapple.justAttached) this.emit('localGrappleHook', { g: s.grapple });
       if (s.grapple.justReleased) this.emit('localGrappleRelease', { speed: s.grapple.releaseSpeed });
@@ -132,6 +146,7 @@ export class GameState extends Emitter {
           hp: ps.hp, alive: !!ps.al, combatState: ps.ws, swingIndex: ps.wi, attackType: ps.wa,
           phase: 0, grounded: !!ps.g, vulnerable: false, protect: false,
           grapple: { state: 0, ax: 0, ay: 0, az: 0, t: 1 },
+          parkour: { state: 0, nx: 0, nz: 0, side: 0 },
           kills: ps.k, deaths: ps.d,
         };
         this.entities.set(ps.id, e);
@@ -140,6 +155,7 @@ export class GameState extends Emitter {
       e.name = ps.n; e.hp = ps.hp; e.alive = !!ps.al; e.kills = ps.k; e.deaths = ps.d;
       e.vulnerable = !!ps.vu; e.protect = !!ps.pr;
       e.grapple = { state: ps.gs | 0, ax: ps.gx, ay: ps.gy, az: ps.gz, t: ps.gt };
+      e.parkour = { state: ps.pk | 0, nx: ps.pn || 0, nz: ps.pz || 0, side: ps.ps || 0 };
       e.buf.push({
         t: snap.st, x: ps.x, y: ps.y, z: ps.z, yaw: ps.ya, pitch: ps.pi,
         sp: ps.sp, ws: ps.ws, wi: ps.wi, wa: ps.wa, wp: ps.wp, g: ps.g, al: ps.al,
@@ -194,13 +210,20 @@ export class GameState extends Emitter {
     const mods = s.move.mods;
     if (s.alive) {
       const hooked = s.grapple.state === GSTATE.ATTACHED;
+      const pkState = s.parkour.state;
       for (const p of this.pending) {
         mods.turn = 1; mods.accel = 1; mods.friction = 1;
         applyModsForState(s.combat, mods);
         if (hooked) { mods.accel *= 0.22; mods.turn *= 0.45; }
+        // Hold the parkour overrides steady across the replay rather than
+        // re-running the state machine, which would double-advance its timers.
+        if (pkState === PSTATE.WALLRUN) { s.move.gravityScale = 0.4; mods.turn *= 0.22; mods.accel *= 0.15; }
+        else if (pkState === PSTATE.WALLCLIMB) s.move.gravityScale = 0.08;
+        else if (pkState === PSTATE.SLIDE) { mods.friction *= 0.11; mods.turn *= 0.42; mods.accel *= 0.25; }
         stepPlayer(s.move, p.cmd, this.world, p.dt, null);
         if (hooked) stepGrapplePost(s.grapple, s.move);
       }
+      s.move.gravityScale = 1;
     } else {
       this.pending.length = 0;
     }

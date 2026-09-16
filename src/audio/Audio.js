@@ -321,6 +321,41 @@ export class AudioSystem {
     this._tone({ freq: 110, slideTo: 50, dur: 0.18, type: 'sine', gain: (0.1 + t * 0.25) * gain, pan });
   }
 
+  /* ------------------------------------------------------------ parkour */
+
+  wallEnter(pos, speed, climb) {
+    if (!this.ready) return;
+    const { gain, pan } = this._spatial(pos, 380);
+    const t = clamp01(speed / 500);
+    // Boot meeting concrete, then a scrape that rides the run.
+    this._noiseBurst({ dur: 0.09, type: 'bandpass', freq: 700 + t * 900, q: 1.2, gain: (0.18 + t * 0.2) * gain, pan });
+    this._noiseBurst({ dur: climb ? 0.5 : 0.75, type: 'bandpass', freq: 2200 + t * 1200, q: 3.5, gain: 0.07 * gain, sweep: 0.55, pan });
+    if (climb) this._tone({ freq: 160, slideTo: 420, dur: 0.4, type: 'triangle', gain: 0.07 * gain, pan });
+  }
+
+  wallKick(pos, speed) {
+    if (!this.ready) return;
+    const { gain, pan } = this._spatial(pos, 420);
+    const t = clamp01(speed / 500);
+    this._noiseBurst({ dur: 0.10, type: 'lowpass', freq: 900 + t * 700, gain: (0.26 + t * 0.22) * gain, sweep: 0.5, pan });
+    this._tone({ freq: 210, slideTo: 90, dur: 0.16, type: 'square', gain: 0.13 * gain, pan });
+    this._noiseBurst({ dur: 0.22, type: 'highpass', freq: 2600, gain: 0.10 * gain, sweep: 1.9, pan });
+  }
+
+  slideStart(pos, speed) {
+    if (!this.ready) return;
+    const { gain, pan } = this._spatial(pos, 320);
+    const t = clamp01(speed / 500);
+    this._noiseBurst({ dur: 0.7 + t * 0.5, type: 'bandpass', freq: 900 + t * 700, q: 1.8, gain: (0.16 + t * 0.14) * gain, sweep: 0.35, pan });
+    this._tone({ freq: 90, slideTo: 55, dur: 0.5, type: 'sine', gain: 0.12 * gain, pan });
+  }
+
+  vault(pos) {
+    if (!this.ready) return;
+    const { gain, pan } = this._spatial(pos, 300);
+    this._noiseBurst({ dur: 0.12, type: 'bandpass', freq: 1500, q: 1.5, gain: 0.14 * gain, sweep: 0.6, pan });
+  }
+
   /* ------------------------------------------------------------ grapple */
 
   grappleFire(pos, hit) {

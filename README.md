@@ -49,6 +49,31 @@ Movement is the game, not a way to reach the game.
   walk, sprint, blitz, rise, fall and grapple all blend continuously into one
   pose, which is then damped again. There is no frame where the character pops.
 
+### Parkour
+
+The environment is the fastest route through the map, and every technique
+below **redirects** your velocity rather than resetting it.
+
+- **Wall-run** — jump alongside any vertical surface above 145 speed and you
+  stick to it. Gravity drops to 14% and ramps back over ~1.5 s, so a wall-run is
+  an arc with a natural end. You can still accelerate along the wall. The camera
+  rolls 13° toward the surface and the whole body rotates onto it.
+- **Wall-kick** — jump off. The along-wall component of your run is kept (and
+  nudged up 4%), then out and up are added. Kick off a wall at 380 and you leave
+  at 380, pointed somewhere new.
+- **Wall-climb** — run at a wall head-on in the air holding forward and you run
+  *up* it for up to 0.55 s. Height is paid for in horizontal speed.
+- **Ledge vault** — ledges up to 46 units high are flowed over automatically at
+  speed. You get exactly enough lift to clear the lip and lose nothing forward.
+  This is the single biggest reason the movement never feels interrupted.
+- **Slide** — hold `CTRL` above 150 speed. Friction drops to 11%, downhill
+  slides accelerate hard, uphill kills them. Jumping out of a slide keeps
+  everything. Measured: a 2-second slide ends at 279 speed where coasting ends
+  at 0.
+
+You cannot ladder a single wall: re-attaching to the same surface is locked out
+for 0.45 s after you leave it.
+
 ### Grappling hook — `G`
 
 The hook is a physical object, never a teleport.
@@ -63,12 +88,18 @@ The hook is a physical object, never a teleport.
 - Arriving at the anchor pops you up over the lip instead of into the wall, so
   roof-to-roof chaining works.
 
-The loop it is built for:
+### The chain
+
+Everything above is one continuous velocity. This is a real run, measured in
+the client:
 
 ```
-sprint → jump → grapple a roof → swing → release at the top of the arc
-       → 400 speed → intercept → 200 damage
+sprint 235 → jump → WALL-RUN at 362 → wall-kick → airborne
+           → grapple → SWING at 496 → release → land at 440 → sprint
 ```
+
+Nothing in that sequence resets your speed. 496 on the swing is 248 damage —
+one connect from a kill.
 
 ## Play
 
@@ -87,7 +118,8 @@ page — the identical authority, with zero latency.
 |---|---|
 | `W A S D` | Move |
 | `SHIFT` | Sprint — hold it, there is no stamina |
-| `SPACE` | Jump |
+| `SPACE` | Jump · wall-kick while on a wall |
+| `CTRL` / `C` | Slide |
 | `G` | Fire grapple / release |
 | `LMB` | Slash. From the sheath it becomes an **iai** draw-cut |
 | `R` / `RMB` | Draw / sheathe |
@@ -194,7 +226,8 @@ cuts, and one glyph arrives before the item does.
 ```
 src/
   core/        Config (every balance value), Input, Util
-  shared/      WorldData · Physics · Movement · Combat · Grapple · Sim · Bots
+  shared/      WorldData · Physics · Movement · Parkour · Combat · Grapple
+               Sim · Bots
                ^ imported verbatim by BOTH the client and the server
   net/         Protocol, Transport (WebSocket | in-page loopback authority)
   game/        GameState (prediction + reconciliation), Avatar, CameraRig

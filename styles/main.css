@@ -117,6 +117,12 @@ html, body {
 .hud-bar-ghost { position: absolute; inset: 0 auto 0 0; background: rgba(255,255,255,.22); transition: width .5s .15s; }
 .hud-speed-foot { display: flex; justify-content: space-between; margin-top: 7px; font-size: 13px; letter-spacing: .22em; }
 .hud-max { color: var(--white); font-weight: 700; }
+.hud-move {
+  margin-top: 8px; font-size: 15px; letter-spacing: .34em; font-weight: 700;
+  color: var(--cyan); height: 18px; opacity: 0;
+  transform: translateX(-6px); transition: opacity .14s, transform .14s;
+}
+.hud-move.on { opacity: 1; transform: none; }
 
 .hud-damage {
   position: absolute; left: 392px; bottom: 34px; width: 210px;

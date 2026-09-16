@@ -14,9 +14,10 @@ import { clamp, clamp01, History } from '../core/Util.js';
 import { makeMoveState, stepPlayer } from './Movement.js';
 import { makeCombatState, stepCombat, WSTATE, isVulnerable, bladeHits } from './Combat.js';
 import { makeGrappleState, stepGrapplePre, stepGrapplePost, GSTATE } from './Grapple.js';
+import { makeParkourState, stepParkourPre, stepParkourPost, PSTATE } from './Parkour.js';
 import { botInput, makeBotState } from './Bots.js';
 
-const EMPTY_INPUT = { seq: 0, mx: 0, mz: 0, yaw: 0, pitch: 0, sprint: false, jump: false, attack: false, sheathe: false, grapple: false };
+const EMPTY_INPUT = { seq: 0, mx: 0, mz: 0, yaw: 0, pitch: 0, sprint: false, jump: false, attack: false, sheathe: false, grapple: false, crouch: false };
 
 function lerpVec(a, b, f) {
   return { x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f, z: a.z + (b.z - a.z) * f };
@@ -52,6 +53,7 @@ export class Sim {
       move: makeMoveState(),
       combat: makeCombatState(),
       grapple: makeGrappleState(),
+      parkour: makeParkourState(),
       bot_: bot ? makeBotState(skill) : null,
       yaw: 0, pitch: 0,
       hp: CFG.MAX_HEALTH,
@@ -133,6 +135,16 @@ export class Sim {
       if (ev.draw) this._emit({ t: 'draw', id: p.id });
       if (ev.sheathe) this._emit({ t: 'sheathe', id: p.id });
 
+      // Order matters: combat sets the movement multipliers, parkour layers on
+      // top of them, the grapple outranks both, then everything integrates.
+      stepParkourPre(p.parkour, p.move, input, this.world, dt, this.time,
+        p.grapple.state === GSTATE.ATTACHED);
+      const pk = p.parkour;
+      if (pk.justWallrun) this._emit({ t: 'wall', id: p.id, x: pk.wallX, y: p.move.pos.y + 11, z: pk.wallZ, s: Math.round(pk.contactSpeed), c: pk.state === PSTATE.WALLCLIMB ? 1 : 0 });
+      if (pk.justKick) this._emit({ t: 'kick', id: p.id, x: p.move.pos.x, y: p.move.pos.y + 11, z: p.move.pos.z, s: Math.round(p.move.speed) });
+      if (pk.justVault) this._emit({ t: 'vault', id: p.id });
+      if (pk.justSlide) this._emit({ t: 'slide', id: p.id, s: Math.round(p.move.speed) });
+
       // Grapple runs around the movement step: the reel/swing forces go in
       // before integration, the rope constraint is enforced after it.
       const wasHooked = p.grapple.state;
@@ -156,6 +168,7 @@ export class Sim {
       const mev = { jumped: false, landed: false, landSpeed: 0 };
       stepPlayer(p.move, input, this.world, dt, mev);
       stepGrapplePost(p.grapple, p.move);
+      stepParkourPost(p.parkour, p.move, this.time);
 
       if (p.grapple.justAttached) this._emit({ t: 'ghook', id: p.id, x: p.grapple.ax, y: p.grapple.ay, z: p.grapple.az });
       if (p.grapple.justReleased) this._emit({ t: 'grelease', id: p.id, s: Math.round(p.grapple.releaseSpeed) });
@@ -278,6 +291,7 @@ export class Sim {
     p.move.pos.x = spawn.x; p.move.pos.y = spawn.y + 2; p.move.pos.z = spawn.z;
     p.combat = makeCombatState();
     p.grapple = makeGrappleState();
+    p.parkour = makeParkourState();
     p.grappleFired = 0;
     p.hp = CFG.MAX_HEALTH;
     p.alive = true;
@@ -334,6 +348,10 @@ export class Sim {
         gs: p.grapple.state,
         gx: r1(p.grapple.ax), gy: r1(p.grapple.ay), gz: r1(p.grapple.az),
         gt: p.grapple.state === GSTATE.FIRING ? r2(clamp(p.grapple.travel / Math.max(1, p.grapple.total), 0, 1)) : 1,
+        pk: p.parkour.state,
+        pn: p.parkour.state ? r2(p.parkour.nx) : 0,
+        pz: p.parkour.state ? r2(p.parkour.nz) : 0,
+        ps: p.parkour.side,
         vu: isVulnerable(p.combat) ? 1 : 0,
         pr: this.time < p.protectUntil ? 1 : 0,
         k: p.stats.kills, d: p.stats.deaths,

@@ -10,12 +10,13 @@
 import * as THREE from '../lib/three.module.js';
 
 import { CFG, speedT, damageForSpeed } from './core/Config.js';
-import { clamp, clamp01, lerp, damp, formatNum } from './core/Util.js';
+import { clamp, clamp01, lerp, damp, angleDelta, formatNum } from './core/Util.js';
 import { Input } from './core/Input.js';
 
 import { buildWorld } from './shared/WorldData.js';
 import { WSTATE, isVulnerable } from './shared/Combat.js';
 import { GSTATE, findAnchor } from './shared/Grapple.js';
+import { PSTATE } from './shared/Parkour.js';
 
 import { LoopbackTransport, WebSocketTransport, BOT_NAMES } from './net/Transport.js';
 import { GameState } from './game/GameState.js';
@@ -368,6 +369,23 @@ class Game {
       if (e.landSpeed > 120) this.wake.burst(G.self.move.pos, e.landSpeed, G.self.move.groundKind);
     });
 
+    G.on('localWall', ({ climb }) => {
+      this.audio.wallEnter(G.self.move.pos, G.self.move.speed, climb);
+      this.rig.wallEnter();
+      this.wake.burst(G.self.move.pos, 90, 'tower');
+    });
+    G.on('localKick', ({ speed }) => {
+      this.audio.wallKick(G.self.move.pos, speed);
+      this.rig.wallKick(speed);
+      this.avatars.get(G.selfId)?.avatar.wallKick();
+      this.wake.burst(G.self.move.pos, 150, 'tower');
+    });
+    G.on('localVault', () => this.audio.vault(G.self.move.pos));
+    G.on('localSlide', ({ speed }) => {
+      this.audio.slideStart(G.self.move.pos, speed);
+      this.rig.slideStart();
+    });
+
     G.on('localGrappleFire', ({ hit }) => {
       this.audio.grappleFire(G.self.move.pos, hit);
       this.rig.grappleFire();
@@ -416,6 +434,18 @@ class Game {
           break;
         case 'grelease':
           if (ev.id !== selfId()) this.audio.grappleRelease(this._entPos(ev.id), ev.s || 0);
+          break;
+        case 'wall':
+          if (ev.id !== selfId()) this.audio.wallEnter({ x: ev.x, y: ev.y, z: ev.z }, ev.s, ev.c);
+          break;
+        case 'kick':
+          if (ev.id !== selfId()) {
+            this.audio.wallKick({ x: ev.x, y: ev.y, z: ev.z }, ev.s);
+            this.avatars.get(ev.id)?.avatar.wallKick();
+          }
+          break;
+        case 'slide':
+          if (ev.id !== selfId()) this.audio.slideStart(this._entPos(ev.id), ev.s);
           break;
       }
     });
@@ -657,10 +687,12 @@ class Game {
       ropeSide = (rx * Math.cos(this.input.yaw) - rz * Math.sin(this.input.yaw)) / Math.max(1, Math.hypot(rx, rz));
     }
 
+    const PK = S.parkour;
     this.rig.update(dt, this._selfPos, this.input.yaw, this.input.pitch, speed, {
       velX: S.move.vel.x, velZ: S.move.vel.z, velY: S.move.vel.y,
       turnRate: clamp(this.lastTurn * 0.1, -1, 1),
       grappling, ropeSide,
+      wallSide: PK.state === PSTATE.WALLRUN ? PK.side : 0,
     });
 
     // Render-only hit-stop: the authority keeps ticking at full rate, only the
@@ -678,7 +710,18 @@ class Game {
 
       a.avatar.root.visible = alive;
       a.avatar.root.position.set(pos.x, pos.y, pos.z);
-      a.avatar.root.rotation.y = yaw;
+
+      // Body facing. Normally you face where you aim, but on a wall or in a
+      // slide the body turns to follow the LINE you are travelling — blended,
+      // so the turn onto a wall is a sweep and not a snap.
+      const pkNow = (local ? S.parkour.state : (ent.parkour?.state | 0));
+      let faceYaw = yaw;
+      if (local && pkNow !== PSTATE.NONE && sp > 25) {
+        faceYaw = Math.atan2(-S.move.vel.x, -S.move.vel.z);
+      }
+      if (a.faceYaw === undefined) a.faceYaw = faceYaw;
+      a.faceYaw += angleDelta(a.faceYaw, faceYaw) * (1 - Math.exp(-11 * dt));
+      a.avatar.root.rotation.y = a.faceYaw;
       // Bank into the turn — a motorcycle cue for a runner with no brakes.
       const bank = local ? clamp(this.lastTurn * 0.012 * speedT(sp), -0.32, 0.32) : 0;
       a.avatar.root.rotation.z = damp(a.avatar.root.rotation.z, bank, 6, dt);
@@ -697,6 +740,7 @@ class Game {
         velY: local ? S.move.vel.y : 0,
         turnRate: local ? clamp(this.lastTurn * 0.1, -1, 1) : 0,
         grapple: grap,
+        parkour: local ? S.parkour : ent.parkour,
         alive,
       });
 
@@ -758,6 +802,11 @@ class Game {
       attacking: S.combat.state === WSTATE.WINDUP || S.combat.state === WSTATE.ACTIVE,
       grappleState: G_.state,
       canGrapple: this._canGrapple,
+      moveState: PK.state === PSTATE.WALLRUN ? 'WALL RUN'
+        : PK.state === PSTATE.WALLCLIMB ? 'WALL CLIMB'
+          : PK.state === PSTATE.SLIDE ? 'SLIDE'
+            : grappling ? 'SWING'
+              : !S.move.grounded && speed > 150 ? 'AIRBORNE' : '',
     });
     if (!S.alive) {
       if (this._deadSince === null || this._deadSince === undefined) this._deadSince = performance.now();

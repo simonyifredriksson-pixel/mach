@@ -45,7 +45,7 @@ export class Input extends Emitter {
         this.keys.delete(code);
         this.emit('keyup', code);
       }
-      if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'Space', 'Tab'].includes(code)) e.preventDefault();
+      if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'Space', 'Tab', 'ControlLeft'].includes(code)) e.preventDefault();
     };
     window.addEventListener('keydown', (e) => onKey(e, true));
     window.addEventListener('keyup', (e) => onKey(e, false));
@@ -98,6 +98,8 @@ export class Input extends Emitter {
     cmd.yaw = this.yaw;
     cmd.pitch = this.pitch;
     cmd.sprint = this.enabled && (k.has('ShiftLeft') || k.has('ShiftRight'));
+    // Slide is held, not toggled — it is a momentum tool, not a stance.
+    cmd.crouch = this.enabled && (k.has('ControlLeft') || k.has('ControlRight') || k.has('KeyC'));
     cmd.jump = this._jumpLatch;
     cmd.attack = this._attackLatch;
     cmd.sheathe = this._sheatheLatch;

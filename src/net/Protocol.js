@@ -32,7 +32,7 @@ export function packInput(cmd) {
     y: Math.round(cmd.yaw * 1000) / 1000,
     p: Math.round(cmd.pitch * 1000) / 1000,
     f: (cmd.sprint ? 1 : 0) | (cmd.jump ? 2 : 0) | (cmd.attack ? 4 : 0)
-      | (cmd.sheathe ? 8 : 0) | (cmd.grapple ? 16 : 0),
+      | (cmd.sheathe ? 8 : 0) | (cmd.grapple ? 16 : 0) | (cmd.crouch ? 32 : 0),
   };
 }
 
@@ -48,6 +48,7 @@ export function unpackInput(o, rtt) {
     attack: !!(o.f & 4),
     sheathe: !!(o.f & 8),
     grapple: !!(o.f & 16),
+    crouch: !!(o.f & 32),
     rtt,
   };
 }

@@ -28,6 +28,7 @@ import { CFG, speedT } from '../core/Config.js';
 import { clamp, clamp01, lerp, damp, smoothstep, angleDelta } from '../core/Util.js';
 import { WSTATE, ATTACK } from '../shared/Combat.js';
 import { GSTATE } from '../shared/Grapple.js';
+import { PSTATE } from '../shared/Parkour.js';
 import { buildKatana } from '../economy/Cosmetics.js';
 import { gradient } from '../world/Materials.js';
 
@@ -97,6 +98,11 @@ const POSE = {
   rise: { lean: 0.16, crouch: 0.00, stride: 0.00, armPump: 0.10, armSweep: 0.45, splay: 0.18, twist: 0.4, head: 0.00, bob: 0, tuck: 1.0 },
   fall: { lean: 0.08, crouch: 0.00, stride: 0.00, armPump: 0.05, armSweep: 0.30, splay: 0.30, twist: 0.4, head: -0.10, bob: 0, tuck: 0.35 },
   grapple: { lean: 0.30, crouch: 0.00, stride: 0.00, armPump: 0.00, armSweep: 0.75, splay: 0.20, twist: 0.6, head: 0.12, bob: 0, tuck: 0.65 },
+  // Parkour. Wall-running still cycles the legs — you are RUNNING on it, not
+  // standing sideways on it — and the slide folds the body down over one leg.
+  wallrun: { lean: 0.26, crouch: 0.06, stride: 0.88, armPump: 0.55, armSweep: 0.35, splay: 0.08, twist: 0.45, head: 0.06, bob: 0.45, tuck: 0 },
+  wallclimb: { lean: -0.34, crouch: 0.00, stride: 0.95, armPump: 0.85, armSweep: 0.00, splay: 0.10, twist: 0.35, head: -0.25, bob: 0.30, tuck: 0 },
+  slide: { lean: 0.30, crouch: 1.00, stride: 0.00, armPump: 0.00, armSweep: 0.85, splay: 0.45, twist: 0.3, head: 0.18, bob: 0, tuck: 0 },
 };
 const POSE_KEYS = Object.keys(POSE.idle);
 
@@ -116,6 +122,9 @@ export class Avatar {
     this.turnLean = 0;
     this.groundW = 1;
     this.blitzW = 0;
+    this.wallRoll = 0;
+    this.slideW = 0;
+    this.kickPulse = 0;
 
     // Live pose parameters (smoothed every frame).
     this.p = {};
@@ -421,18 +430,29 @@ export class Avatar {
     this.blitzW = wBlitz;
 
     const rising = (st.velY || 0) > 20;
-    const wGrapple = hooked ? 1 : 0;
-    const airPart = air * (1 - wGrapple);
+    const pkState = st.parkour ? st.parkour.state : PSTATE.NONE;
+    const wWallrun = pkState === PSTATE.WALLRUN ? 1 : 0;
+    const wWallclimb = pkState === PSTATE.WALLCLIMB ? 1 : 0;
+    const wSlide = pkState === PSTATE.SLIDE ? 1 : 0;
+    const wGrapple = hooked && !wWallrun && !wWallclimb ? 1 : 0;
+    // Parkour states take the body; everything else shares what is left.
+    const taken = clamp01(wWallrun + wWallclimb + wSlide + wGrapple);
+    const rest = 1 - taken;
+    const airPart = air * rest;
 
     const W = {
-      idle: this.groundW * wIdle * (1 - wGrapple),
-      walk: this.groundW * wWalk * (1 - wGrapple),
-      sprint: this.groundW * wSprint * (1 - wGrapple),
-      blitz: this.groundW * wBlitz * (1 - wGrapple),
+      idle: this.groundW * wIdle * rest,
+      walk: this.groundW * wWalk * rest,
+      sprint: this.groundW * wSprint * rest,
+      blitz: this.groundW * wBlitz * rest,
       rise: airPart * (rising ? 1 : 0),
       fall: airPart * (rising ? 0 : 1),
       grapple: wGrapple,
+      wallrun: wWallrun,
+      wallclimb: wWallclimb,
+      slide: wSlide,
     };
+    this.slideW = damp(this.slideW, wSlide, 13, dt);
     let total = 0;
     for (const k in W) total += W[k];
     if (total < 1e-4) { W.idle = 1; total = 1; }
@@ -464,8 +484,17 @@ export class Avatar {
     const turn = st.turnRate || 0;
     this.turnLean = damp(this.turnLean, clamp(turn * 0.35, -0.42, 0.42) * (0.3 + t), 6, dt);
 
-    this.body.rotation.x = P.lean;
-    this.body.rotation.z = this.turnLean;
+    // Wall roll: on a wall the whole body rotates so the feet meet the surface,
+    // which is the difference between running a wall and standing on one. It is
+    // damped like everything else, so entering and leaving a wall is a sweep.
+    const wallSide = st.parkour ? st.parkour.side : 0;
+    const rollTarget = pkState === PSTATE.WALLRUN ? -wallSide * 1.02 : 0;
+    this.wallRoll = damp(this.wallRoll, rollTarget, 9, dt);
+
+    this.kickPulse = Math.max(0, this.kickPulse - dt * 3.2);
+
+    this.body.rotation.x = P.lean - this.kickPulse * 0.5;
+    this.body.rotation.z = this.turnLean + this.wallRoll;
     this.body.position.y = -P.lean * 2.0 - P.crouch * 2.4;
 
     // Landing squash: a spring, so it recovers smoothly instead of popping.
@@ -496,12 +525,25 @@ export class Avatar {
     const airKneeR = lerp(-0.35, -0.95, tuck);
 
     const gw = this.groundW;
-    this.thighL.rotation.x = lerp(airLegL, groundLegL, gw) - P.crouch * 0.6;
-    this.thighR.rotation.x = lerp(airLegR, groundLegR, gw) - P.crouch * 0.6;
-    this.shinL.rotation.x = lerp(airKneeL, kneeL, gw) - P.crouch * 0.5;
-    this.shinR.rotation.x = lerp(airKneeR, kneeR, gw) - P.crouch * 0.5;
+    let tL = lerp(airLegL, groundLegL, gw) - P.crouch * 0.6;
+    let tR = lerp(airLegR, groundLegR, gw) - P.crouch * 0.6;
+    let kL = lerp(airKneeL, kneeL, gw) - P.crouch * 0.5;
+    let kR = lerp(airKneeR, kneeR, gw) - P.crouch * 0.5;
+
+    // Slide: one leg thrown forward, the other folded under. Blended in, so the
+    // drop into a slide is a fold rather than a snap.
+    if (this.slideW > 0.002) {
+      const s = this.slideW;
+      tL = lerp(tL, 0.95, s);   kL = lerp(kL, -0.25, s);
+      tR = lerp(tR, -0.35, s);  kR = lerp(kR, -2.0, s);
+    }
+
+    this.thighL.rotation.x = tL;
+    this.thighR.rotation.x = tR;
+    this.shinL.rotation.x = kL;
+    this.shinR.rotation.x = kR;
     this.thighL.rotation.z = P.splay * 0.35;
-    this.thighR.rotation.z = -P.splay * 0.35;
+    this.thighR.rotation.z = -P.splay * 0.35 - this.slideW * 0.25;
 
     /* --------------------------------------------------------- weapon */
     const cs = st.combatState;
@@ -637,6 +679,9 @@ export class Avatar {
     const t = clamp01(power / 420);
     this.landVel -= 0.9 + t * 3.4;
   }
+
+  /** Called on a wall kick: a short whole-body recoil away from the surface. */
+  wallKick() { this.kickPulse = 1; this.landVel -= 1.2; }
 
   _updateGhosts(dt) {
     if (this._ghostParentPending && this.root.parent) {
