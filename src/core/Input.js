@@ -24,6 +24,7 @@ export class Input extends Emitter {
     this._attackLatch = false;
     this._jumpLatch = false;
     this._sheatheLatch = false;
+    this._grappleLatch = false;
     this._attackHeld = false;
 
     this._bind();
@@ -38,6 +39,7 @@ export class Input extends Emitter {
         this.keys.add(code);
         if (code === 'Space') { this._jumpLatch = true; e.preventDefault(); }
         if (code === 'KeyR') this._sheatheLatch = true;
+        if (code === 'KeyG') this._grappleLatch = true;      // fire / release hook
         this.emit('keydown', code);
       } else {
         this.keys.delete(code);
@@ -99,9 +101,11 @@ export class Input extends Emitter {
     cmd.jump = this._jumpLatch;
     cmd.attack = this._attackLatch;
     cmd.sheathe = this._sheatheLatch;
+    cmd.grapple = this._grappleLatch;
     this._jumpLatch = false;
     this._attackLatch = false;
     this._sheatheLatch = false;
+    this._grappleLatch = false;
     return cmd;
   }
 

@@ -13,9 +13,10 @@ import { CFG, damageForSpeed } from '../core/Config.js';
 import { clamp, clamp01, History } from '../core/Util.js';
 import { makeMoveState, stepPlayer } from './Movement.js';
 import { makeCombatState, stepCombat, WSTATE, isVulnerable, bladeHits } from './Combat.js';
+import { makeGrappleState, stepGrapplePre, stepGrapplePost, GSTATE } from './Grapple.js';
 import { botInput, makeBotState } from './Bots.js';
 
-const EMPTY_INPUT = { seq: 0, mx: 0, mz: 0, yaw: 0, pitch: 0, sprint: false, jump: false, attack: false, sheathe: false };
+const EMPTY_INPUT = { seq: 0, mx: 0, mz: 0, yaw: 0, pitch: 0, sprint: false, jump: false, attack: false, sheathe: false, grapple: false };
 
 function lerpVec(a, b, f) {
   return { x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f, z: a.z + (b.z - a.z) * f };
@@ -50,6 +51,7 @@ export class Sim {
       id, name, bot, color,
       move: makeMoveState(),
       combat: makeCombatState(),
+      grapple: makeGrappleState(),
       bot_: bot ? makeBotState(skill) : null,
       yaw: 0, pitch: 0,
       hp: CFG.MAX_HEALTH,
@@ -115,7 +117,7 @@ export class Sim {
       } else {
         // Starved: hold the stick, drop the edges.
         input = p.lastInput;
-        input.jump = false; input.attack = false; input.sheathe = false;
+        input.jump = false; input.attack = false; input.sheathe = false; input.grapple = false;
       }
       p.lastInput = input;
       p.yaw = input.yaw || 0;
@@ -131,10 +133,33 @@ export class Sim {
       if (ev.draw) this._emit({ t: 'draw', id: p.id });
       if (ev.sheathe) this._emit({ t: 'sheathe', id: p.id });
 
+      // Grapple runs around the movement step: the reel/swing forces go in
+      // before integration, the rope constraint is enforced after it.
+      const wasHooked = p.grapple.state;
+      stepGrapplePre(p.grapple, p.move, input, this.world, dt, p.yaw, p.pitch);
+      if (p.grapple.state === GSTATE.ATTACHED) {
+        // While latched, the rope is doing the steering.
+        p.move.mods.accel *= 0.22;
+        p.move.mods.turn *= 0.45;
+      }
+      if (p.grapple.fired !== p.grappleFired) {
+        p.grappleFired = p.grapple.fired;
+        this._emit({
+          t: 'gfire', id: p.id,
+          hit: p.grapple.state !== GSTATE.IDLE ? 1 : 0,
+          x: p.grapple.ax, y: p.grapple.ay, z: p.grapple.az,
+        });
+      }
+
       const before = p.move.pos;
       const px = before.x, pz = before.z;
       const mev = { jumped: false, landed: false, landSpeed: 0 };
       stepPlayer(p.move, input, this.world, dt, mev);
+      stepGrapplePost(p.grapple, p.move);
+
+      if (p.grapple.justAttached) this._emit({ t: 'ghook', id: p.id, x: p.grapple.ax, y: p.grapple.ay, z: p.grapple.az });
+      if (p.grapple.justReleased) this._emit({ t: 'grelease', id: p.id, s: Math.round(p.grapple.releaseSpeed) });
+      void wasHooked;
 
       p.stats.distance += Math.hypot(p.move.pos.x - px, p.move.pos.z - pz);
       if (p.move.speed > p.stats.topSpeed) p.stats.topSpeed = p.move.speed;
@@ -252,6 +277,8 @@ export class Sim {
     p.move = makeMoveState();
     p.move.pos.x = spawn.x; p.move.pos.y = spawn.y + 2; p.move.pos.z = spawn.z;
     p.combat = makeCombatState();
+    p.grapple = makeGrappleState();
+    p.grappleFired = 0;
     p.hp = CFG.MAX_HEALTH;
     p.alive = true;
     p.hitBy.clear();
@@ -304,6 +331,9 @@ export class Sim {
         wi: p.combat.swingIndex,
         wa: p.combat.attackType,
         wp: r2(p.combat.phase),
+        gs: p.grapple.state,
+        gx: r1(p.grapple.ax), gy: r1(p.grapple.ay), gz: r1(p.grapple.az),
+        gt: p.grapple.state === GSTATE.FIRING ? r2(clamp(p.grapple.travel / Math.max(1, p.grapple.total), 0, 1)) : 1,
         vu: isVulnerable(p.combat) ? 1 : 0,
         pr: this.time < p.protectUntil ? 1 : 0,
         k: p.stats.kills, d: p.stats.deaths,

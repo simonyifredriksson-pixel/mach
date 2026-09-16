@@ -1,51 +1,125 @@
 /**
- * [MACH] — the runner.
+ * VELOCITY RONIN — the runner.
  *
- * A hand-built rig: no skinning, no imported assets, every joint animated in
- * code. That keeps the silhouette legible at 500 units/second, which is the
- * only thing that matters — you read an opponent by their pose and their trail,
- * because you have about 90 milliseconds to decide.
+ * A hand-built rig with a real blend tree. No pose is ever switched on: every
+ * state contributes a WEIGHT to a shared set of pose parameters, the weights
+ * are continuous functions of speed / grounded / airtime / grapple, and the
+ * result is then critically damped. There is no frame anywhere in this file
+ * where the character can snap.
  *
- * Pose blends by speed: upright walk -> forward-leaning sprint -> a near-flat
- * dive at terminal velocity. Swings rotate a chest pivot, so the whole body
- * carries the cut.
+ *   idle ─┐
+ *   walk ─┼─► weighted pose params ─► damped ─► joints ─► additive layers
+ *  sprint─┤                                              (swing, land, aim)
+ *  blitz ─┤
+ *   air  ─┤
+ * grapple─┘
+ *
+ * Foot skating is solved properly: stride frequency is derived from ground
+ * speed divided by stride LENGTH, and stride length grows with speed, so at
+ * 500 the character is taking 6.5-metre bounds at 7 Hz rather than running a
+ * 20 Hz cycle in place.
+ *
+ * Geometry is merged per body part — one mesh per limb, two materials per
+ * character — so a full lobby of ronin is still cheap to draw.
  */
 
 import * as THREE from '../../lib/three.module.js';
 import { CFG, speedT } from '../core/Config.js';
-import { clamp, clamp01, lerp, damp, angleDelta } from '../core/Util.js';
+import { clamp, clamp01, lerp, damp, smoothstep, angleDelta } from '../core/Util.js';
 import { WSTATE, ATTACK } from '../shared/Combat.js';
+import { GSTATE } from '../shared/Grapple.js';
 import { buildKatana } from '../economy/Cosmetics.js';
 import { gradient } from '../world/Materials.js';
 
-const box = (w, h, d) => new THREE.BoxGeometry(w, h, d);
+/* ------------------------------------------------------- merge helpers */
 
-/** Limb helper: a pivot at the joint with geometry hanging below it. */
-function limb(parent, geo, mat, len, offsetY = 0) {
-  const pivot = new THREE.Object3D();
-  pivot.position.y = offsetY;
-  const mesh = new THREE.Mesh(geo, mat);
-  mesh.position.y = -len / 2;
-  mesh.castShadow = true;
-  pivot.add(mesh);
-  parent.add(pivot);
-  return pivot;
+const _m = new THREE.Matrix4();
+const _q = new THREE.Quaternion();
+const _e = new THREE.Euler();
+const _v = new THREE.Vector3();
+
+/** A box piece: size, offset, colour, optional rotation and taper. */
+function piece(w, h, d, x, y, z, color, rx = 0, ry = 0, rz = 0) {
+  return { g: new THREE.BoxGeometry(w, h, d), x, y, z, color, rx, ry, rz };
 }
+function cylPiece(rt, rb, h, seg, x, y, z, color, rx = 0, ry = 0, rz = 0) {
+  return { g: new THREE.CylinderGeometry(rt, rb, h, seg), x, y, z, color, rx, ry, rz };
+}
+
+/** Merge pieces into one geometry with vertex colours. */
+function merge(pieces) {
+  const pos = [], nrm = [], col = [];
+  const c = new THREE.Color();
+  for (const p of pieces) {
+    const g = p.g.index ? p.g.toNonIndexed() : p.g;
+    _e.set(p.rx, p.ry, p.rz);
+    _q.setFromEuler(_e);
+    _m.compose(_v.set(p.x, p.y, p.z), _q, new THREE.Vector3(1, 1, 1));
+    g.applyMatrix4(_m);
+    if (!g.attributes.normal) g.computeVertexNormals();
+    const a = g.attributes.position.array, n = g.attributes.normal.array;
+    c.setHex(p.color);
+    for (let i = 0; i < a.length; i += 3) {
+      pos.push(a[i], a[i + 1], a[i + 2]);
+      nrm.push(n[i], n[i + 1], n[i + 2]);
+      col.push(c.r, c.g, c.b);
+    }
+    g.dispose();
+  }
+  const out = new THREE.BufferGeometry();
+  out.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  out.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3));
+  out.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  return out;
+}
+
+/** Joint node with a merged mesh hanging off it. */
+function joint(parent, pieces, mat, y = 0) {
+  const node = new THREE.Object3D();
+  node.position.y = y;
+  if (pieces.length) {
+    const mesh = new THREE.Mesh(merge(pieces), mat);
+    mesh.castShadow = true;
+    node.add(mesh);
+  }
+  parent.add(node);
+  return node;
+}
+
+/* ------------------------------------------------------------ pose sets */
+
+// Every field is blended. Nothing here is ever assigned directly to a joint.
+const POSE = {
+  idle: { lean: 0.02, crouch: 0.00, stride: 0.10, armPump: 0.18, armSweep: 0, splay: 0.05, twist: 1.0, head: 0.00, bob: 0.25, tuck: 0 },
+  walk: { lean: 0.09, crouch: 0.02, stride: 0.62, armPump: 0.75, armSweep: 0, splay: 0.05, twist: 1.0, head: 0.02, bob: 0.70, tuck: 0 },
+  sprint: { lean: 0.34, crouch: 0.11, stride: 1.00, armPump: 1.00, armSweep: 0.10, splay: 0.10, twist: 0.9, head: 0.10, bob: 1.00, tuck: 0 },
+  blitz: { lean: 0.66, crouch: 0.26, stride: 0.72, armPump: 0.15, armSweep: 1.00, splay: 0.22, twist: 0.5, head: 0.30, bob: 0.55, tuck: 0 },
+  rise: { lean: 0.16, crouch: 0.00, stride: 0.00, armPump: 0.10, armSweep: 0.45, splay: 0.18, twist: 0.4, head: 0.00, bob: 0, tuck: 1.0 },
+  fall: { lean: 0.08, crouch: 0.00, stride: 0.00, armPump: 0.05, armSweep: 0.30, splay: 0.30, twist: 0.4, head: -0.10, bob: 0, tuck: 0.35 },
+  grapple: { lean: 0.30, crouch: 0.00, stride: 0.00, armPump: 0.00, armSweep: 0.75, splay: 0.20, twist: 0.6, head: 0.12, bob: 0, tuck: 0.65 },
+};
+const POSE_KEYS = Object.keys(POSE.idle);
 
 export class Avatar {
   constructor(skinDef, katanaDef, sheathDef, opts = {}) {
     this.skin = skinDef;
     this.root = new THREE.Group();
     this.isLocal = !!opts.local;
+
     this.phase = Math.random() * 10;
-    this.lean = 0;
     this.swing = 0;
-    this.swingTarget = 0;
-    this.blink = 0;
-    this.prevCombat = WSTATE.SHEATHED;
-    this.scarfA = new THREE.Vector3();
-    this.scarfB = new THREE.Vector3();
     this.hurt = 0;
+    this.landSquash = 0;
+    this.landVel = 0;
+    this.aimBlend = 0;
+    this.prevYaw = 0;
+    this.turnLean = 0;
+    this.groundW = 1;
+    this.blitzW = 0;
+
+    // Live pose parameters (smoothed every frame).
+    this.p = {};
+    for (const k of POSE_KEYS) this.p[k] = POSE.idle[k];
 
     this._materials(skinDef.spec);
     this._build(skinDef.spec);
@@ -56,177 +130,187 @@ export class Avatar {
   /* --------------------------------------------------------- materials */
 
   _materials(s) {
-    const g = gradient();
-    const mk = (color, extra = {}) => new THREE.MeshToonMaterial({
-      color, gradientMap: g,
-      transparent: !!s.translucent || !!extra.transparent,
-      opacity: s.translucent ?? extra.opacity ?? 1,
-      ...extra,
+    this.matBody = new THREE.MeshToonMaterial({
+      gradientMap: gradient(),
+      vertexColors: true,
+      transparent: !!s.translucent,
+      opacity: s.translucent ?? 1,
     });
-    this.matSuit = mk(s.suit);
-    this.matAccent = mk(s.accent);
-    this.matTrim = mk(s.trim);
-    this.matCloth = mk(s.cloth);
-    this.matVisor = new THREE.MeshBasicMaterial({ color: s.visor, toneMapped: false });
-    this.matVent = new THREE.MeshBasicMaterial({ color: s.trim, toneMapped: false, transparent: true, opacity: 0 });
+    this.matGlow = new THREE.MeshBasicMaterial({
+      color: s.visor, toneMapped: false, transparent: true, opacity: 0.95,
+    });
+    this.matVent = new THREE.MeshBasicMaterial({
+      color: s.trim, toneMapped: false, transparent: true, opacity: 0,
+    });
   }
 
   /* ------------------------------------------------------------- build */
 
   _build(s) {
-    const R = this.root;
+    const SUIT = s.suit, ACC = s.accent, TRIM = s.trim, CLOTH = s.cloth;
+    const DARK = new THREE.Color(SUIT).multiplyScalar(0.72).getHex();
+    const LEATHER = new THREE.Color(TRIM).multiplyScalar(0.92).getHex();
 
-    // Hips -------------------------------------------------------------
     this.body = new THREE.Object3D();
-    R.add(this.body);
+    this.root.add(this.body);
 
-    this.hips = new THREE.Object3D();
-    this.hips.position.y = 8.6;
-    this.body.add(this.hips);
-    const pelvis = new THREE.Mesh(box(5.4, 3.0, 3.2), this.matSuit);
-    pelvis.castShadow = true;
-    this.hips.add(pelvis);
-    const belt = new THREE.Mesh(box(5.7, 0.8, 3.5), this.matTrim);
-    belt.position.y = 1.3;
-    this.hips.add(belt);
+    /* ---- hips: narrow, with a working belt ---- */
+    this.hips = joint(this.body, [
+      piece(4.9, 3.0, 3.0, 0, 0, 0, SUIT),
+      piece(5.2, 0.9, 3.3, 0, 1.2, 0, LEATHER),            // belt
+      piece(1.5, 1.1, 0.7, 1.9, 1.2, 1.5, ACC),            // buckle
+      piece(1.3, 1.6, 1.0, -2.0, 0.2, 1.2, LEATHER),       // pouch
+      piece(1.1, 1.4, 0.9, 1.6, -0.1, -1.4, LEATHER),      // rear pouch
+    ], this.matBody, 8.7);
 
-    // Torso ------------------------------------------------------------
-    this.chest = new THREE.Object3D();
-    this.chest.position.y = 1.5;
-    this.hips.add(this.chest);
-    const torso = new THREE.Mesh(box(6.0, 5.2, 3.5), this.matSuit);
-    torso.position.y = 2.6;
-    torso.castShadow = true;
-    this.chest.add(torso);
-    const plate = new THREE.Mesh(box(4.4, 2.6, 0.5), this.matAccent);
-    plate.position.set(0, 3.4, 1.85);
-    this.chest.add(plate);
-    if (s.hivis) {
-      for (const y of [1.6, 2.4]) {
-        const band = new THREE.Mesh(box(6.2, 0.55, 3.7), this.matTrim);
-        band.position.y = y;
-        this.chest.add(band);
-      }
-    }
-    if (s.livery) {
-      const stripe = new THREE.Mesh(box(1.1, 5.3, 3.6), this.matAccent);
-      stripe.position.set(-1.4, 2.6, 0);
-      this.chest.add(stripe);
-      const stripe2 = stripe.clone();
-      stripe2.position.x = 1.4;
-      this.chest.add(stripe2);
-    }
+    /* ---- chest: tapered, with a rig ---- */
+    // Deliberately lean: a runner, not a tank. Width comes from the pauldron
+    // and the coat, never from the torso itself.
+    this.chest = joint(this.hips, [
+      piece(4.7, 4.6, 2.8, 0, 2.5, 0, SUIT),               // ribcage
+      piece(5.2, 1.6, 3.0, 0, 4.6, 0, SUIT),               // upper chest
+      piece(2.3, 1.7, 0.45, 0, 3.1, 1.55, ACC),            // sternum plate
+      piece(3.4, 0.5, 0.4, 0, 1.9, 1.5, LEATHER),          // lower rib strap
+      piece(0.7, 4.4, 0.4, -1.4, 3.0, 1.55, LEATHER, 0, 0, 0.30),  // rig strap
+      piece(0.7, 4.4, 0.4, 1.4, 3.0, 1.55, LEATHER, 0, 0, -0.30),
+      piece(2.6, 2.2, 0.9, 0, 3.4, -1.7, DARK),            // compact back pack
+      piece(0.6, 0.6, 2.0, 0, 4.4, -2.0, TRIM),            // hook mount
+    ], this.matBody, 1.4);
+
     if (s.vents) {
       this.vents = [];
       for (let i = 0; i < 3; i++) {
-        const v = new THREE.Mesh(box(0.9, 1.9, 0.4), this.matVent);
-        v.position.set(-2.1 + i * 2.1, 2.2, -1.9);
+        const v = new THREE.Mesh(new THREE.BoxGeometry(0.8, 1.8, 0.35), this.matVent);
+        v.position.set(-1.9 + i * 1.9, 3.2, -1.8);
         this.chest.add(v);
         this.vents.push(v);
       }
     }
 
-    // Head -------------------------------------------------------------
-    this.neck = new THREE.Object3D();
-    this.neck.position.y = 5.6;
-    this.chest.add(this.neck);
-    const head = new THREE.Mesh(box(3.0, 3.0, 3.0), this.matSuit);
-    head.position.y = 1.5;
-    head.castShadow = true;
-    this.neck.add(head);
-    const visor = new THREE.Mesh(box(2.6, 0.95, 0.45), this.matVisor);
-    visor.position.set(0, 1.6, 1.55);
-    this.neck.add(visor);
-    const crest = new THREE.Mesh(box(0.7, 0.8, 3.1), this.matTrim);
-    crest.position.y = 3.1;
-    this.neck.add(crest);
+    /* ---- head: hood + mask, distinct silhouette ---- */
+    this.neck = joint(this.chest, [
+      piece(2.6, 2.6, 2.6, 0, 1.5, 0, SUIT),               // skull
+      piece(2.9, 1.2, 2.9, 0, 2.6, -0.1, CLOTH),           // hood crown
+      piece(3.2, 2.2, 1.4, 0, 1.6, -1.2, CLOTH),           // hood back
+      piece(2.4, 1.3, 0.6, 0, 0.9, 1.25, DARK),            // face mask
+      piece(0.45, 0.8, 0.45, 1.1, 2.7, -0.7, ACC, 0.5, 0, 0.35),    // topknot tie
+      piece(0.34, 1.9, 0.34, 1.25, 3.2, -1.15, TRIM, 0.9, 0, 0.35),
+    ], this.matBody, 5.3);
+    this.visor = new THREE.Mesh(new THREE.BoxGeometry(2.45, 0.55, 0.42), this.matGlow);
+    this.visor.position.set(0, 1.75, 1.35);
+    this.neck.add(this.visor);
+
     if (s.lantern) {
-      const lamp = new THREE.Mesh(
-        new THREE.CylinderGeometry(1.8, 1.8, 3.4, 10),
-        new THREE.MeshBasicMaterial({ color: s.visor, transparent: true, opacity: 0.85 }),
-      );
+      const lamp = new THREE.Mesh(new THREE.CylinderGeometry(1.7, 1.7, 3.2, 10), this.matGlow);
       lamp.position.y = 1.6;
       this.neck.add(lamp);
-      head.visible = false;
       this.lantern = lamp;
     }
 
-    // Arms -------------------------------------------------------------
-    const armGeo = box(1.5, 3.6, 1.5), foreGeo = box(1.3, 3.4, 1.3);
-    this.shoulderL = new THREE.Object3D();
-    this.shoulderL.position.set(-3.3, 4.7, 0);
-    this.chest.add(this.shoulderL);
-    this.armL = limb(this.shoulderL, armGeo, this.matSuit, 3.6);
-    this.foreL = limb(this.armL, foreGeo, this.matAccent, 3.4, -3.6);
-
-    // The weapon side hangs off a chest pivot so the body drives the cut.
+    /* ---- arms ---- */
+    // Right side carries the blade and hangs off a chest pivot, so the whole
+    // body drives a cut instead of just the shoulder.
     this.swingPivot = new THREE.Object3D();
-    this.swingPivot.position.set(0, 4.7, 0);
+    this.swingPivot.position.set(0, 4.4, 0);
     this.chest.add(this.swingPivot);
+
     this.shoulderR = new THREE.Object3D();
-    this.shoulderR.position.set(3.3, 0, 0);
+    this.shoulderR.position.set(2.75, 0, 0);
     this.swingPivot.add(this.shoulderR);
-    this.armR = limb(this.shoulderR, armGeo, this.matSuit, 3.6);
-    this.foreR = limb(this.armR, foreGeo, this.matAccent, 3.4, -3.6);
-    this.hand = new THREE.Object3D();
-    this.hand.position.y = -3.4;
-    this.foreR.add(this.hand);
+    const pauldron = new THREE.Mesh(merge([
+      piece(2.4, 1.5, 2.8, 0.25, 0.25, 0, ACC),
+      piece(2.0, 0.6, 2.4, 0.35, 1.05, 0, TRIM),
+    ]), this.matBody);
+    pauldron.castShadow = true;
+    this.shoulderR.add(pauldron);
+    this.armR = joint(this.shoulderR, [piece(1.35, 3.4, 1.35, 0, -1.7, 0, SUIT)], this.matBody);
+    this.foreR = joint(this.armR, [
+      piece(1.2, 3.2, 1.2, 0, -1.6, 0, SUIT),
+      piece(1.45, 1.5, 1.45, 0, -2.5, 0, LEATHER),         // bracer
+    ], this.matBody, -3.4);
+    this.handR = joint(this.foreR, [piece(1.1, 1.1, 1.3, 0, -0.45, 0.1, DARK)], this.matBody, -3.2);
 
-    for (const pad of [[-3.5, 4.9], [3.5, 4.9]]) {
-      const p = new THREE.Mesh(box(2.2, 1.4, 3.0), this.matTrim);
-      p.position.set(pad[0], pad[1], 0);
-      p.castShadow = true;
-      this.chest.add(p);
+    // Left side carries the grapple launcher.
+    this.shoulderL = new THREE.Object3D();
+    this.shoulderL.position.set(-2.75, 4.4, 0);
+    this.chest.add(this.shoulderL);
+    const strap = new THREE.Mesh(merge([piece(1.9, 0.9, 2.5, -0.2, 0.3, 0, TRIM)]), this.matBody);
+    this.shoulderL.add(strap);
+    this.armL = joint(this.shoulderL, [piece(1.35, 3.4, 1.35, 0, -1.7, 0, SUIT)], this.matBody);
+    this.foreL = joint(this.armL, [
+      piece(1.2, 3.2, 1.2, 0, -1.6, 0, SUIT),
+      // grapple launcher: block, spool, muzzle
+      piece(1.7, 1.9, 2.4, -0.15, -2.3, 0.5, DARK),
+      cylPiece(0.75, 0.75, 0.5, 10, -0.15, -2.3, 1.0, TRIM, 0, 0, Math.PI / 2),
+      cylPiece(0.34, 0.34, 1.5, 8, -0.15, -2.9, 1.5, ACC, Math.PI / 2, 0, 0),
+    ], this.matBody, -3.4);
+    this.handL = joint(this.foreL, [piece(1.1, 1.1, 1.3, 0, -0.45, 0.1, DARK)], this.matBody, -3.2);
+    // Muzzle marker: where the cable is drawn from.
+    this.muzzle = new THREE.Object3D();
+    this.muzzle.position.set(-0.15, -3.6, 2.1);
+    this.foreL.add(this.muzzle);
+    this.launcherLight = new THREE.Mesh(new THREE.SphereGeometry(0.30, 6, 5), this.matGlow);
+    this.launcherLight.position.set(-0.15, -2.3, 1.35);
+    this.foreL.add(this.launcherLight);
+
+    /* ---- legs: thigh, shin, knee pad, boot ---- */
+    const leg = (side) => {
+      const hip = new THREE.Object3D();
+      hip.position.set(side * 1.45, -1.4, 0);
+      this.hips.add(hip);
+      const thigh = joint(hip, [
+        piece(1.75, 4.3, 1.75, 0, -2.15, 0, SUIT),
+        piece(1.95, 0.7, 1.95, 0, -3.3, 0, LEATHER),       // thigh strap
+      ], this.matBody);
+      const shin = joint(thigh, [
+        piece(1.5, 4.0, 1.5, 0, -2.0, 0, DARK),
+        piece(1.7, 1.2, 0.8, 0, -0.35, 0.65, ACC),         // knee pad
+        piece(1.75, 1.6, 1.9, 0, -3.5, 0.15, LEATHER),     // boot upper
+        piece(1.9, 0.6, 3.1, 0, -4.25, 0.55, TRIM),        // sole
+      ], this.matBody, -4.3);
+      return { hip, thigh, shin };
+    };
+    const L = leg(-1), R = leg(1);
+    this.thighL = L.thigh; this.shinL = L.shin;
+    this.thighR = R.thigh; this.shinR = R.shin;
+
+    /* ---- cloth: scarf and coat tails ---- */
+    this.scarf = [];
+    {
+      let parent = this.neck;
+      for (let i = 0; i < 5; i++) {
+        const seg = new THREE.Object3D();
+        seg.position.set(0, i === 0 ? 0.5 : 0, i === 0 ? -1.1 : -2.1);
+        const mesh = new THREE.Mesh(merge([
+          piece(1.9 - i * 0.24, 0.42, 2.2, 0, 0, -1.1, CLOTH),
+        ]), this.matBody);
+        seg.add(mesh);
+        parent.add(seg);
+        parent = seg;
+        this.scarf.push(seg);
+      }
     }
-
-    // Legs -------------------------------------------------------------
-    const thighGeo = box(1.9, 4.5, 1.9), shinGeo = box(1.7, 4.2, 1.7);
-    this.hipL = new THREE.Object3D(); this.hipL.position.set(-1.5, -1.4, 0); this.hips.add(this.hipL);
-    this.thighL = limb(this.hipL, thighGeo, this.matSuit, 4.5);
-    this.shinL = limb(this.thighL, shinGeo, this.matTrim, 4.2, -4.5);
-    this.hipR = new THREE.Object3D(); this.hipR.position.set(1.5, -1.4, 0); this.hips.add(this.hipR);
-    this.thighR = limb(this.hipR, thighGeo, this.matSuit, 4.5);
-    this.shinR = limb(this.thighR, shinGeo, this.matTrim, 4.2, -4.5);
-    for (const [shin, sign] of [[this.shinL, -1], [this.shinR, 1]]) {
-      const foot = new THREE.Mesh(box(1.9, 0.9, 3.2), this.matTrim);
-      foot.position.set(0, -4.1, 0.6);
-      shin.add(foot);
-    }
-
-    // Cloth ------------------------------------------------------------
-    this.cloth = [];
-    if (s.coat) {
-      let parent = this.chest;
+    this.tails = [];
+    for (const side of [-1, 1]) {
+      let parent = this.hips;
+      const chain = [];
       for (let i = 0; i < 3; i++) {
         const seg = new THREE.Object3D();
-        seg.position.y = i === 0 ? 1.0 : -3.2;
-        const m = new THREE.Mesh(box(6.2 - i * 0.6, 3.4, 0.5), this.matCloth);
-        m.position.set(0, -1.7, -2.0 + i * 0.1);
-        m.castShadow = true;
-        seg.add(m);
+        seg.position.set(i === 0 ? side * 1.5 : 0, i === 0 ? 0.6 : -2.6, i === 0 ? -1.4 : 0);
+        const mesh = new THREE.Mesh(merge([
+          piece(2.3 - i * 0.35, 2.8, 0.42, 0, -1.4, 0, CLOTH),
+        ]), this.matBody);
+        seg.add(mesh);
         parent.add(seg);
         parent = seg;
-        this.cloth.push(seg);
+        chain.push(seg);
       }
-    } else {
-      // Scarf — the cheapest, best speed cue in the game.
-      let parent = this.neck;
-      for (let i = 0; i < 4; i++) {
-        const seg = new THREE.Object3D();
-        seg.position.set(0, i === 0 ? 0.6 : 0, i === 0 ? -1.2 : -2.6);
-        const m = new THREE.Mesh(box(2.0 - i * 0.28, 0.45, 2.8), this.matCloth);
-        m.position.z = -1.4;
-        seg.add(m);
-        parent.add(seg);
-        parent = seg;
-        this.cloth.push(seg);
-      }
+      this.tails.push(chain);
     }
 
-    // Saya on the left hip, worn edge-up and raked back along the body the way
-    // a katana actually sits — not standing upright out of the belt.
+    /* ---- saya on the hip ---- */
     this.sheathNode = new THREE.Object3D();
-    this.sheathNode.position.set(-2.8, 0.2, -0.6);
+    this.sheathNode.position.set(-2.7, 0.2, -0.5);
     this.sheathNode.rotation.set(-1.32, 0.22, 0.30);
     this.hips.add(this.sheathNode);
   }
@@ -235,7 +319,7 @@ export class Avatar {
     this.ghostHistory = [];
     this.ghosts = [];
     const mat = new THREE.MeshBasicMaterial({
-      color: 0xffffff, transparent: true, opacity: 0.16, depthWrite: false, blending: THREE.AdditiveBlending,
+      color: 0xffffff, transparent: true, opacity: 0.15, depthWrite: false, blending: THREE.AdditiveBlending,
     });
     for (let i = 0; i < 3; i++) {
       const clone = this.body.clone(true);
@@ -243,10 +327,9 @@ export class Avatar {
       const holder = new THREE.Group();
       holder.add(clone);
       this.ghosts.push({ holder, nodes: collectNodes(clone), delay: 0.07 + i * 0.07 });
-      this.root.parent?.add(holder);
-      this._ghostParentPending = true;
     }
     this.selfNodes = collectNodes(this.body);
+    this._ghostParentPending = true;
   }
 
   /* ------------------------------------------------------------ katana */
@@ -254,29 +337,27 @@ export class Avatar {
   setKatana(katanaDef, sheathDef) {
     if (this.katana) {
       this.katana.group.parent?.remove(this.katana.group);
-      this.katana.group.traverse((o) => { if (o.isMesh) { o.geometry.dispose?.(); } });
+      this.katana.group.traverse((o) => { if (o.isMesh) o.geometry.dispose?.(); });
     }
     this.katanaDef = katanaDef;
     this.katana = buildKatana(katanaDef);
-    this.katana.group.scale.setScalar(1.0);
-    this.hand.add(this.katana.group);
-    this.katana.group.position.set(0, 0, 0);
+    this.handR.add(this.katana.group);
+    this.katana.group.position.set(0, -0.3, 0);
     this.katanaHeld = true;
 
-    // Saya.
     if (this.sheathMesh) this.sheathNode.remove(this.sheathMesh);
     const sp = sheathDef?.spec ?? { color: 0x101014, trim: 0x3d434f };
     const len = (katanaDef.spec.blade.len ?? 11) + 1.6;
     const saya = new THREE.Group();
     const body = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.62, 0.52, len, 8),
+      new THREE.CylinderGeometry(0.60, 0.50, len, 8),
       new THREE.MeshStandardMaterial({ color: sp.color, metalness: sp.metal ?? 0.3, roughness: sp.metal ? 0.1 : 0.55 }),
     );
     body.position.y = len / 2;
     body.castShadow = true;
     saya.add(body);
     for (let i = 0; i < 3; i++) {
-      const ring = new THREE.Mesh(new THREE.TorusGeometry(0.64, 0.1, 5, 10),
+      const ring = new THREE.Mesh(new THREE.TorusGeometry(0.63, 0.1, 5, 10),
         new THREE.MeshStandardMaterial({ color: sp.trim, metalness: 0.8, roughness: 0.3, emissive: sp.glow ? sp.trim : 0x000000 }));
       ring.rotation.x = Math.PI / 2;
       ring.position.y = 1.2 + i * (len - 3) / 2;
@@ -284,7 +365,6 @@ export class Avatar {
     }
     this.sheathMesh = saya;
     this.sheathNode.add(saya);
-    this.sheathLen = len;
   }
 
   setWeaponSheathed(sheathed) {
@@ -297,133 +377,239 @@ export class Avatar {
       g.position.set(0, 0, 0);
       g.rotation.set(0, 0, 0);
     } else {
-      this.hand.add(g);
-      g.position.set(0, 0, 0);
+      this.handR.add(g);
+      g.position.set(0, -0.3, 0);
       g.rotation.set(0, 0, 0);
     }
   }
 
-  /** World-space blade tip and base, for trails and slash VFX. */
   bladePoints(tip, base) {
     this.katana.group.updateWorldMatrix(true, false);
     tip.copy(this.katana.tipLocal).applyMatrix4(this.katana.group.matrixWorld);
     base.copy(this.katana.baseLocal).applyMatrix4(this.katana.group.matrixWorld);
   }
 
+  /** World position of the grapple launcher muzzle — where the cable starts. */
+  grappleOrigin(out) {
+    this.muzzle.updateWorldMatrix(true, false);
+    return out.setFromMatrixPosition(this.muzzle.matrixWorld);
+  }
+
   /* ------------------------------------------------------------ update */
 
   /**
-   * @param {number} dt
    * @param {object} st {speed, grounded, yaw, pitch, combatState, phase,
-   *                     swingIndex, attackType, alive, vulnerable, moving}
+   *   swingIndex, attackType, alive, velY, grapple:{state,ax,ay,az}, turnRate}
    */
   update(dt, st) {
-    const t = speedT(st.speed);
-    const sprinting = st.speed > 130;
+    const speed = st.speed;
+    const t = speedT(speed);
+    const grounded = st.grounded;
+    const gs = st.grapple ? st.grapple.state : GSTATE.IDLE;
+    const hooked = gs === GSTATE.ATTACHED;
 
-    /* ---- gait ---- */
-    const freq = Math.min(5.6, 1.15 + st.speed * 0.021);
-    if (st.grounded && st.speed > 6) this.phase += dt * freq * Math.PI * 2;
-    else if (!st.grounded) this.phase += dt * 3;
-    const ph = this.phase;
-    const amp = clamp(0.25 + t * 1.35, 0.25, 1.35) * (st.grounded ? 1 : 0.35);
+    /* ------------------------------------------------- blend weights */
+    // Grounded-ness itself is smoothed, so touching down is a transition and
+    // not a switch.
+    this.groundW = damp(this.groundW, grounded ? 1 : 0, 14, dt);
+    const air = 1 - this.groundW;
 
-    const targetLean = st.grounded ? lerp(0.02, 0.62, Math.pow(t, 0.85)) : 0.18;
-    this.lean = damp(this.lean, targetLean, 9, dt);
-    this.body.rotation.x = this.lean;
-    this.body.position.y = -this.lean * 2.2;
+    const wBlitz = clamp01((speed - 290) / 190);
+    const wSprint = clamp01((speed - 85) / 140) * (1 - wBlitz);
+    const wWalk = clamp01((speed - 6) / 70) * (1 - wSprint - wBlitz);
+    const wIdle = Math.max(0, 1 - wWalk - wSprint - wBlitz);
+    this.blitzW = wBlitz;
 
-    // Vertical bob + roll, scaled so it never becomes nausea at speed.
-    const bob = Math.sin(ph * 2) * (0.30 + t * 0.5) * (st.grounded ? 1 : 0);
-    this.hips.position.y = 8.6 + bob;
-    this.hips.rotation.z = Math.sin(ph) * 0.06 * (1 - t * 0.5);
-    this.hips.rotation.y = Math.sin(ph) * 0.20 * (1 - t * 0.35);
-    this.chest.rotation.y = -this.hips.rotation.y * 0.8;
+    const rising = (st.velY || 0) > 20;
+    const wGrapple = hooked ? 1 : 0;
+    const airPart = air * (1 - wGrapple);
 
-    if (st.grounded) {
-      this.thighL.rotation.x = Math.sin(ph) * amp;
-      this.thighR.rotation.x = Math.sin(ph + Math.PI) * amp;
-      this.shinL.rotation.x = clamp(-Math.sin(ph - 0.8) * amp * 1.3, -2.0, 0.1);
-      this.shinR.rotation.x = clamp(-Math.sin(ph + Math.PI - 0.8) * amp * 1.3, -2.0, 0.1);
-    } else {
-      this.thighL.rotation.x = damp(this.thighL.rotation.x, -0.9, 8, dt);
-      this.thighR.rotation.x = damp(this.thighR.rotation.x, 0.35, 8, dt);
-      this.shinL.rotation.x = damp(this.shinL.rotation.x, -1.3, 8, dt);
-      this.shinR.rotation.x = damp(this.shinR.rotation.x, -0.5, 8, dt);
+    const W = {
+      idle: this.groundW * wIdle * (1 - wGrapple),
+      walk: this.groundW * wWalk * (1 - wGrapple),
+      sprint: this.groundW * wSprint * (1 - wGrapple),
+      blitz: this.groundW * wBlitz * (1 - wGrapple),
+      rise: airPart * (rising ? 1 : 0),
+      fall: airPart * (rising ? 0 : 1),
+      grapple: wGrapple,
+    };
+    let total = 0;
+    for (const k in W) total += W[k];
+    if (total < 1e-4) { W.idle = 1; total = 1; }
+
+    // Weighted sum of every pose set, then damp. Double-smoothed on purpose.
+    const tgt = {};
+    for (const key of POSE_KEYS) tgt[key] = 0;
+    for (const name in W) {
+      const w = W[name] / total;
+      if (w <= 0) continue;
+      const pose = POSE[name];
+      for (const key of POSE_KEYS) tgt[key] += pose[key] * w;
     }
+    for (const key of POSE_KEYS) this.p[key] = damp(this.p[key], tgt[key], 11, dt);
+    const P = this.p;
 
-    // Left arm: pumping at a walk, swept back into the slipstream at speed.
-    const sweep = clamp01((t - 0.35) / 0.5);
-    const pump = Math.sin(ph + Math.PI) * amp * 0.9;
-    this.armL.rotation.x = lerp(pump, -2.25, sweep);
-    this.armL.rotation.z = lerp(0.08, 0.5, sweep);
-    this.foreL.rotation.x = lerp(-0.5 - Math.max(0, pump) * 0.5, -0.35, sweep);
+    /* ------------------------------------------------------ gait clock */
+    // Stride LENGTH grows with speed, so frequency stays human and the feet
+    // never skate: at 500 this is a 6.5 m bound at about 7 Hz.
+    const strideLen = lerp(16, 68, Math.pow(t, 0.9));
+    const freq = clamp(speed / strideLen, 0.55, 7.6);
+    if (this.groundW > 0.25 && speed > 4) this.phase += dt * freq * Math.PI * 2;
+    else this.phase += dt * 1.4;                       // idle breathing
+    const ph = this.phase;
 
-    /* ---- weapon ---- */
+    const amp = P.stride * (0.55 + t * 0.85);
+
+    /* ---------------------------------------------------- body posture */
+    const turn = st.turnRate || 0;
+    this.turnLean = damp(this.turnLean, clamp(turn * 0.35, -0.42, 0.42) * (0.3 + t), 6, dt);
+
+    this.body.rotation.x = P.lean;
+    this.body.rotation.z = this.turnLean;
+    this.body.position.y = -P.lean * 2.0 - P.crouch * 2.4;
+
+    // Landing squash: a spring, so it recovers smoothly instead of popping.
+    this.landVel += -this.landSquash * 190 * dt;
+    this.landVel *= Math.exp(-12 * dt);
+    this.landSquash += this.landVel * dt;
+    if (Math.abs(this.landSquash) < 0.001) { this.landSquash = 0; this.landVel = 0; }
+
+    const bob = Math.sin(ph * 2) * 0.34 * P.bob * this.groundW;
+    this.hips.position.y = 8.7 + bob + this.landSquash * 3.2;
+    this.hips.rotation.z = Math.sin(ph) * 0.055 * P.bob;
+    this.hips.rotation.y = Math.sin(ph) * 0.17 * P.twist;
+    this.chest.rotation.y = -this.hips.rotation.y * 0.75;
+    this.chest.rotation.x = P.crouch * 0.5 + this.landSquash * 1.2;
+
+    /* --------------------------------------------------------- legs */
+    const tuck = P.tuck;
+    const legL = Math.sin(ph), legR = Math.sin(ph + Math.PI);
+    const groundLegL = legL * amp;
+    const groundLegR = legR * amp;
+    const kneeL = clamp(-Math.sin(ph - 0.75) * amp * 1.35, -2.1, 0.05);
+    const kneeR = clamp(-Math.sin(ph + Math.PI - 0.75) * amp * 1.35, -2.1, 0.05);
+
+    // Air/grapple legs trail and tuck; blended, never switched.
+    const airLegL = lerp(-0.35, -1.15, tuck);
+    const airLegR = lerp(0.25, -0.55, tuck);
+    const airKneeL = lerp(-0.55, -1.65, tuck);
+    const airKneeR = lerp(-0.35, -0.95, tuck);
+
+    const gw = this.groundW;
+    this.thighL.rotation.x = lerp(airLegL, groundLegL, gw) - P.crouch * 0.6;
+    this.thighR.rotation.x = lerp(airLegR, groundLegR, gw) - P.crouch * 0.6;
+    this.shinL.rotation.x = lerp(airKneeL, kneeL, gw) - P.crouch * 0.5;
+    this.shinR.rotation.x = lerp(airKneeR, kneeR, gw) - P.crouch * 0.5;
+    this.thighL.rotation.z = P.splay * 0.35;
+    this.thighR.rotation.z = -P.splay * 0.35;
+
+    /* --------------------------------------------------------- weapon */
     const cs = st.combatState;
     const attacking = cs === WSTATE.WINDUP || cs === WSTATE.ACTIVE;
     const recovering = cs === WSTATE.RECOVER;
     this.setWeaponSheathed(cs === WSTATE.SHEATHED || (cs === WSTATE.SHEATHING && st.phase > 0.6));
 
-    // swing runs -1 (wound up) -> +1 (followed through), mirrored per index.
     const dir = st.swingIndex === 1 ? -1 : 1;
-    let target = 0;
-    if (cs === WSTATE.WINDUP) target = -1;
-    else if (cs === WSTATE.ACTIVE) target = lerp(-0.4, 1, st.phase);
-    else if (recovering) target = lerp(1, 0.15, clamp01(st.phase * 1.4));
-    const rate = cs === WSTATE.ACTIVE ? 42 : cs === WSTATE.WINDUP ? 16 : 9;
-    this.swing = damp(this.swing, target, rate, dt);
+    let swingTarget = 0;
+    if (cs === WSTATE.WINDUP) swingTarget = -1;
+    else if (cs === WSTATE.ACTIVE) swingTarget = lerp(-0.4, 1, st.phase);
+    else if (recovering) swingTarget = lerp(1, 0.12, clamp01(st.phase * 1.4));
+    const rate = cs === WSTATE.ACTIVE ? 40 : cs === WSTATE.WINDUP ? 15 : 8;
+    this.swing = damp(this.swing, swingTarget, rate, dt);
 
     const sw = this.swing * dir;
-    const rising = st.swingIndex === 2;
+    const rising2 = st.swingIndex === 2;
     const iai = st.attackType === ATTACK.IAI;
 
-    this.swingPivot.rotation.y = -sw * 1.75;
-    this.swingPivot.rotation.z = rising ? sw * 0.55 - 0.3 : sw * 0.28;
-    this.swingPivot.rotation.x = rising ? -0.7 - sw * 0.5 : (attacking || recovering ? -0.25 : 0);
-    this.chest.rotation.y += -sw * 0.42;
-    this.hips.rotation.y += -sw * 0.14;
+    this.swingPivot.rotation.y = -sw * 1.7;
+    this.swingPivot.rotation.z = rising2 ? sw * 0.5 - 0.28 : sw * 0.26;
+    this.swingPivot.rotation.x = rising2 ? -0.65 - sw * 0.45 : (attacking || recovering ? -0.22 : 0);
+    this.chest.rotation.y += -sw * 0.40;
+    this.hips.rotation.y += -sw * 0.13;
+
+    const pump = Math.sin(ph + Math.PI) * amp * 0.85 * P.armPump;
+    const pumpL = Math.sin(ph) * amp * 0.85 * P.armPump;
+    const sweep = P.armSweep;
 
     if (attacking || recovering) {
-      this.armR.rotation.x = lerp(-1.25, -0.35, clamp01(this.swing * 0.5 + 0.5));
-      this.armR.rotation.z = iai ? -0.55 : -0.25;
-      this.foreR.rotation.x = lerp(-1.45, -0.28, clamp01(this.swing * 0.5 + 0.5));
-      this.hand.rotation.z = rising ? -0.5 : 0.25;
-      this.hand.rotation.x = iai ? -0.4 : -0.15;
+      const f = clamp01(this.swing * 0.5 + 0.5);
+      this.armR.rotation.x = lerp(-1.3, -0.32, f);
+      this.armR.rotation.z = iai ? -0.55 : -0.22;
+      this.foreR.rotation.x = lerp(-1.5, -0.25, f);
+      this.handR.rotation.z = rising2 ? -0.5 : 0.25;
+      this.handR.rotation.x = iai ? -0.4 : -0.15;
     } else if (this.katanaHeld) {
-      // Guard stance: blade held low and across, tightening as you speed up.
-      this.armR.rotation.x = damp(this.armR.rotation.x, lerp(-0.35, -0.9, t) + Math.sin(ph) * amp * 0.25, 8, dt);
-      this.armR.rotation.z = damp(this.armR.rotation.z, -0.22, 8, dt);
-      this.foreR.rotation.x = damp(this.foreR.rotation.x, -0.85 - t * 0.35, 8, dt);
-      this.hand.rotation.set(0.1, 0, 0.55);
+      // Guard stance, tightening as you accelerate.
+      this.armR.rotation.x = damp(this.armR.rotation.x, lerp(-0.30, -1.05, sweep) + pump * 0.5, 9, dt);
+      this.armR.rotation.z = damp(this.armR.rotation.z, lerp(-0.20, -0.42, sweep), 9, dt);
+      this.foreR.rotation.x = damp(this.foreR.rotation.x, lerp(-0.80, -1.25, sweep), 9, dt);
+      this.handR.rotation.set(0.1, 0, 0.5);
     } else {
-      // Sheathed: hand rests at the saya, ready for the iai.
+      // Sheathed: hand rides the saya, ready for the iai.
       const reach = cs === WSTATE.WINDUP ? 1 : 0;
-      this.armR.rotation.x = damp(this.armR.rotation.x, lerp(pump * 0.8, -0.9, Math.max(sweep, reach)), 9, dt);
-      this.armR.rotation.z = damp(this.armR.rotation.z, lerp(-0.1, -0.75, reach), 9, dt);
-      this.foreR.rotation.x = damp(this.foreR.rotation.x, lerp(-0.4, -1.6, reach), 9, dt);
-      this.hand.rotation.set(0, 0, 0);
+      this.armR.rotation.x = damp(this.armR.rotation.x, lerp(pump, -1.0, Math.max(sweep, reach)), 9, dt);
+      this.armR.rotation.z = damp(this.armR.rotation.z, lerp(-0.08, -0.7, reach), 9, dt);
+      this.foreR.rotation.x = damp(this.foreR.rotation.x, lerp(-0.35, -1.5, reach), 9, dt);
+      this.handR.rotation.set(0, 0, 0);
     }
 
-    this.neck.rotation.x = clamp(-this.lean * 0.85 + (st.pitch || 0) * 0.35, -0.8, 0.6);
+    /* ---------------------------------------- left arm / grapple aim */
+    // When the hook is out, the launcher arm points at the anchor. Blended in
+    // and out, so the arm travels to the target rather than teleporting.
+    const wantAim = gs !== GSTATE.IDLE ? 1 : 0;
+    this.aimBlend = damp(this.aimBlend, wantAim, 12, dt);
 
-    /* ---- cloth ---- */
-    const flap = Math.sin(this.phase * 1.6) * 0.12 * (0.3 + t);
-    for (let i = 0; i < this.cloth.length; i++) {
-      const seg = this.cloth[i];
-      const lag = lerp(0.35, 1.25, t) + i * 0.12;
-      seg.rotation.x = damp(seg.rotation.x, lag + flap * (i + 1) - this.lean * 0.5, 10 - i * 1.5, dt);
-      seg.rotation.y = damp(seg.rotation.y, Math.sin(this.phase * 1.1 + i) * 0.18 * (0.4 + t), 8, dt);
+    let aimPitch = 0, aimYaw = 0;
+    if (this.aimBlend > 0.01 && st.grapple) {
+      this.root.updateWorldMatrix(true, false);
+      _v.set(st.grapple.ax, st.grapple.ay, st.grapple.az);
+      this.root.worldToLocal(_v);
+      const horiz = Math.hypot(_v.x, _v.z);
+      aimPitch = clamp(Math.atan2(_v.y - 13, horiz), -1.2, 1.3);
+      aimYaw = clamp(Math.atan2(_v.x, -_v.z), -1.1, 1.1);
     }
 
-    /* ---- skin specials ---- */
+    const restL = lerp(pumpL, -2.0, sweep);
+    const restLz = lerp(0.10, 0.44, sweep);
+    this.armL.rotation.x = damp(this.armL.rotation.x, lerp(restL, -aimPitch - 1.35, this.aimBlend), 12, dt);
+    this.armL.rotation.z = damp(this.armL.rotation.z, lerp(restLz, aimYaw * 0.6 + 0.2, this.aimBlend), 12, dt);
+    this.armL.rotation.y = damp(this.armL.rotation.y, lerp(0, aimYaw * 0.5, this.aimBlend), 12, dt);
+    this.foreL.rotation.x = damp(this.foreL.rotation.x, lerp(-0.45 - Math.max(0, pumpL) * 0.5, -0.12, this.aimBlend), 12, dt);
+
+    this.launcherLight.material = this.matGlow;
+    this.launcherLight.visible = this.aimBlend > 0.05;
+
+    /* ---------------------------------------------------------- head */
+    this.neck.rotation.x = damp(this.neck.rotation.x,
+      clamp(-P.lean * 0.8 + P.head + (st.pitch || 0) * 0.3, -0.8, 0.7), 9, dt);
+    this.neck.rotation.z = -this.turnLean * 0.4;
+
+    /* --------------------------------------------------------- cloth */
+    const wind = 0.35 + t * 1.5;
+    const flutter = Math.sin(this.phase * 1.7) * 0.10 * (0.3 + t);
+    for (let i = 0; i < this.scarf.length; i++) {
+      const seg = this.scarf[i];
+      const lag = wind + i * 0.10 - P.lean * 0.45;
+      seg.rotation.x = damp(seg.rotation.x, lag + flutter * (i + 1), 9 - i * 1.1, dt);
+      seg.rotation.y = damp(seg.rotation.y, Math.sin(this.phase * 1.15 + i * 0.7) * 0.22 * (0.35 + t) - this.turnLean * 0.5, 7, dt);
+    }
+    for (let s = 0; s < this.tails.length; s++) {
+      const side = s === 0 ? -1 : 1;
+      for (let i = 0; i < this.tails[s].length; i++) {
+        const seg = this.tails[s][i];
+        const lag = wind * 0.8 + i * 0.16;
+        seg.rotation.x = damp(seg.rotation.x, lag + flutter * (i + 1) * 0.7, 8 - i, dt);
+        seg.rotation.z = damp(seg.rotation.z, side * (0.10 + t * 0.30) + this.turnLean * 0.6, 7, dt);
+      }
+    }
+
+    /* ------------------------------------------------------ specials */
     if (this.vents) {
       const heat = Math.pow(t, 1.5);
-      for (const v of this.vents) { v.material.opacity = heat * 0.95; v.scale.y = 0.6 + heat; }
-      this.matVent.color.setHex(this.skin.spec.trim);
+      for (const v of this.vents) { v.material.opacity = heat * 0.9; v.scale.y = 0.6 + heat; }
     }
     if (this.lantern) {
-      this.lantern.material.opacity = 0.65 + Math.sin(performance.now() * 0.004) * 0.12 + t * 0.2;
+      this.lantern.material.opacity = 0.65 + Math.sin(performance.now() * 0.004) * 0.10 + t * 0.2;
     }
     if (this.katana?.extras) {
       const now = performance.now() * 0.001;
@@ -432,18 +618,24 @@ export class Avatar {
         else if (e.type === 'pulse') e.mesh.material.opacity = 0.16 + Math.sin(now * e.rate * 6.28) * 0.1 + t * 0.2;
         else if (e.type === 'flicker') e.mesh.material.opacity = 0.12 + Math.random() * 0.14 + t * 0.25;
         else if (e.type === 'spin') e.mesh.rotation.z += dt * e.rate;
-        else if (e.type === 'tick') e.mesh.rotation.y = -Math.floor(now * 1) * (Math.PI / 30);
+        else if (e.type === 'tick') e.mesh.rotation.y = -Math.floor(now) * (Math.PI / 30);
       }
     }
 
-    /* ---- hit flash ---- */
+    /* ---------------------------------------------------- hit flash */
     this.hurt = Math.max(0, this.hurt - dt * 4);
-    if (this.hurt > 0) {
+    if (this.matBody.emissive) {
       const f = this.hurt;
-      this.matSuit.emissive?.setRGB(f, f * 0.15, f * 0.1);
-    } else if (this.matSuit.emissive) this.matSuit.emissive.setRGB(0, 0, 0);
+      this.matBody.emissive.setRGB(f * 0.9, f * 0.12, f * 0.08);
+    }
 
     if (this.ghosts) this._updateGhosts(dt);
+  }
+
+  /** Called on landing: kicks the squash spring. */
+  land(power) {
+    const t = clamp01(power / 420);
+    this.landVel -= 0.9 + t * 3.4;
   }
 
   _updateGhosts(dt) {
@@ -452,13 +644,8 @@ export class Avatar {
       this._ghostParentPending = false;
     }
     const now = performance.now() * 0.001;
-    this.ghostHistory.push({
-      t: now,
-      p: this.root.position.clone(),
-      r: this.root.rotation.y,
-    });
+    this.ghostHistory.push({ t: now, p: this.root.position.clone(), r: this.root.rotation.y });
     while (this.ghostHistory.length > 60) this.ghostHistory.shift();
-
     for (const g of this.ghosts) {
       const want = now - g.delay;
       let s = this.ghostHistory[0];

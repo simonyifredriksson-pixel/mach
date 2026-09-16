@@ -243,6 +243,10 @@ function genYards(S, P, rng, terrainAt) {
   for (let s = 0; s < 22; s++) {
     const cx = randRange(rng, 300, 2350), cz = randRange(rng, -2350, -320);
     if (Math.abs(cz) < 240) continue;
+    // Never drop a container in a speed lane — an unavoidable wall at 400 is
+    // not an obstacle, it is a bug.
+    if (Math.abs(Math.max(Math.abs(cx), Math.abs(cz)) - 1800) < 190) continue;
+    if (Math.abs(cx) < 230) continue;
     const base = terrainAt(cx, cz);
     const along = rng() < 0.5;
     const steps = 2 + Math.floor(rng() * 3);

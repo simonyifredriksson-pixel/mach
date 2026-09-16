@@ -211,6 +211,41 @@ export class CombatFX {
     this.spawnArc(pos, dirYaw, slashDef, 9 + speedT * 16, Math.random() * 0.6 - 0.3);
   }
 
+  /**
+   * The >350 speed connect. Deliberately a different event from a normal hit:
+   * a wider ring, a brighter core and a harder spark cone — but still clean,
+   * still short, and it never obscures the centre of the screen.
+   */
+  heavyImpact(pos, speed, slashDef, dirYaw) {
+    const t = clamp01((speed - 350) / 150);
+    const hot = new THREE.Color().setHSL(lerp(0.09, 0.02, t), 1.0, 0.68);
+    const white = new THREE.Color(0xffffff);
+
+    // Directional spark cone along the blade line, not a spherical puff.
+    const fx = -Math.sin(dirYaw), fz = -Math.cos(dirYaw);
+    const n = 30 + Math.floor(t * 26);
+    for (let i = 0; i < n; i++) {
+      const spread = 0.9;
+      const a = (Math.random() - 0.5) * spread;
+      const e = (Math.random() - 0.5) * spread;
+      const s = 220 + Math.random() * (420 + t * 460);
+      const cx = fx * Math.cos(a) - fz * Math.sin(a);
+      const cz = fx * Math.sin(a) + fz * Math.cos(a);
+      this.sparks.emit({
+        x: pos.x, y: pos.y, z: pos.z,
+        vx: cx * s, vy: e * s * 0.55 + 60, vz: cz * s,
+        color: Math.random() < 0.35 ? white : hot,
+        size: 14 + Math.random() * 20, life: 0.16 + Math.random() * 0.3,
+        gravity: 280, drag: 3.0, alpha: 1,
+      });
+    }
+    // Two-stage flash: a hard core and an expanding shock ring.
+    this.glow.emit({ x: pos.x, y: pos.y, z: pos.z, color: white, size: 120 + t * 130, life: 0.11, drag: 8, grow: 340, alpha: 1 });
+    this.glow.emit({ x: pos.x, y: pos.y, z: pos.z, color: hot, size: 40, life: 0.30, drag: 2.5, grow: 900 + t * 700, alpha: 0.75 });
+
+    this.spawnArc(pos, dirYaw, slashDef, 16 + t * 18, Math.random() * 0.5 - 0.25);
+  }
+
   /** Blocked by spawn protection — deliberately flat and unsatisfying. */
   blocked(pos) {
     const c = new THREE.Color(0x9fd8ff);

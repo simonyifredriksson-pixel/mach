@@ -1,17 +1,21 @@
 /**
- * [MACH] — post stack.
+ * VELOCITY RONIN — post stack.
  *
- * One extra fullscreen pass. It carries the entire "how fast am I" language:
+ * Design rule, and it is not negotiable: SPEED MUST NEVER MAKE THE GAME HARDER
+ * TO LOOK AT. Sprinting should read as exhilarating, not as eye strain.
  *
- *   depth outlines   -> the comic read, always on
- *   radial blur      -> fades in from ~180 speed
- *   speed lines      -> fades in from ~210, peaks at 500
- *   chromatic edges  -> high speed only, edges of frame only
- *   vignette + grain -> constant, subtle
- *   hurt flash       -> on damage taken
+ * So there is deliberately NO chromatic aberration, NO speed-scaled film grain,
+ * NO screen noise and NO ambient shake. What is left is clean and directional:
  *
- * Everything is scaled so that at a walk the frame is clean and at 500 it is
- * barely controllable — but never illegible.
+ *   depth outlines  -> the comic read, always on, speed-independent
+ *   speed lines     -> crisp peripheral strokes, centre stays perfectly clear
+ *   edge streak     -> a gentle radial smear at the very edge of frame only
+ *   cool tint       -> a whisper of colour at the periphery at high speed
+ *   vignette        -> mild, constant
+ *   hurt flash      -> on damage taken only
+ *
+ * The centre 40% of the screen is never touched by any speed effect, because
+ * that is where the enemy, your blade and your grapple line live.
  */
 
 import * as THREE from '../../lib/three.module.js';
@@ -54,25 +58,26 @@ void main(){
   vec2 dir = uv - centre;
   float r = length(dir);
 
-  /* ---- chromatic aberration, edges only ---- */
-  float ca = uSpeedT * uSpeedT * 0.0075 * smoothstep(0.15, 0.75, r);
-  vec3 col;
-  col.r = texture2D(tDiffuse, uv - dir * ca).r;
-  col.g = texture2D(tDiffuse, uv).g;
-  col.b = texture2D(tDiffuse, uv + dir * ca).b;
+  /* ---- no chromatic aberration anywhere: it is pure eye strain ---- */
+  vec3 col = texture2D(tDiffuse, uv).rgb;
 
-  /* ---- radial motion blur ---- */
-  if (uBlur > 0.003) {
-    float amt = uBlur * smoothstep(0.02, 0.9, r);
-    vec3 acc = col;
-    float w = 1.0;
-    for (int i = 1; i < 8; i++) {
-      float f = float(i) / 7.0;
-      vec2 o = dir * amt * f;
-      acc += texture2D(tDiffuse, uv - o).rgb * (1.0 - f * 0.55);
-      w += (1.0 - f * 0.55);
+  /* ---- edge streak: a soft directional smear, PERIPHERY ONLY ----
+     Held off until r > 0.55 so the centre of the frame — where you actually
+     fight — is pixel-for-pixel sharp no matter how fast you are going. */
+  if (uBlur > 0.0015) {
+    float amt = uBlur * smoothstep(0.55, 1.05, r);
+    if (amt > 0.0004) {
+      vec3 acc = col;
+      float w = 1.0;
+      for (int i = 1; i < 5; i++) {
+        float f = float(i) / 4.0;
+        vec2 o = dir * amt * f;
+        float wi = 1.0 - f * 0.6;
+        acc += texture2D(tDiffuse, uv - o).rgb * wi;
+        w += wi;
+      }
+      col = acc / w;
     }
-    col = acc / w;
   }
 
   /* ---- depth outline ---- */
@@ -90,25 +95,32 @@ void main(){
     col = mix(col, col * 0.06, edge);
   }
 
-  /* ---- speed lines: peripheral only, and never enough to hide a target ---- */
+  /* ---- speed lines: clean directional strokes, strictly peripheral ---- */
   if (uLines > 0.001) {
     float a = atan(dir.y * (uRes.y / uRes.x), dir.x);
-    float lane = floor(a * 30.0 + hash(vec2(floor(a * 30.0), 1.0)) * 2.0);
+    float lane = floor(a * 26.0);
     float seed = hash(vec2(lane, 3.0));
-    float streak = fract(seed * 7.0 + uTime * (2.5 + seed * 4.0));
-    float len = 0.10 + seed * 0.22;
-    float band = smoothstep(0.0, 0.04, streak) * (1.0 - smoothstep(len, len + 0.20, streak));
-    // Held well outside the centre so the blade arc stays clean.
-    float radial = smoothstep(0.38, 0.78, r) * (1.0 - smoothstep(0.92, 1.25, r));
-    float l = band * radial * uLines * (0.30 + seed * 0.70);
-    col += vec3(0.85, 0.92, 1.0) * l * 0.30;
+    // Each lane is a single crisp stroke sweeping outward at its own pace.
+    float streak = fract(seed * 7.0 + uTime * (1.9 + seed * 2.6));
+    float len = 0.13 + seed * 0.20;
+    float band = smoothstep(0.0, 0.03, streak) * (1.0 - smoothstep(len, len + 0.16, streak));
+    // Thin the stroke across the lane so it is a line, not a wedge.
+    float acrossLane = abs(fract(a * 26.0) - 0.5) * 2.0;
+    float thin = 1.0 - smoothstep(0.25, 0.85, acrossLane);
+    float radial = smoothstep(0.44, 0.86, r) * (1.0 - smoothstep(0.95, 1.30, r));
+    float l = band * thin * radial * uLines * (0.45 + seed * 0.55);
+    col += vec3(0.88, 0.94, 1.0) * l * 0.34;
   }
 
-  /* ---- vignette / grade ---- */
-  float vig = 1.0 - smoothstep(0.48, 1.10, r) * (0.26 + uSpeedT * 0.28);
+  /* ---- a whisper of cool colour at the very edge at high speed ---- */
+  if (uSpeedT > 0.45) {
+    float tint = smoothstep(0.45, 1.0, uSpeedT) * smoothstep(0.55, 1.1, r) * 0.13;
+    col = mix(col, col * vec3(0.86, 0.95, 1.12), tint);
+  }
+
+  /* ---- vignette: mild and, crucially, NOT speed-scaled ---- */
+  float vig = 1.0 - smoothstep(0.52, 1.12, r) * 0.24;
   col *= vig;
-  float lum = dot(col, vec3(0.299, 0.587, 0.114));
-  col = mix(col, vec3(lum), smoothstep(0.45, 1.0, r) * 0.22);
 
   /* ---- damage / low health ---- */
   if (uHurt > 0.001) {
@@ -121,9 +133,12 @@ void main(){
   }
   if (uFlash > 0.001) col = mix(col, uFlashColor, uFlash);
 
-  /* ---- grain ---- */
-  float g2 = hash(uv * uRes + fract(uTime) * 91.7);
-  col += (g2 - 0.5) * 0.016;
+  /* ---- dither ----
+     Not film grain: a fixed ±0.2/255 ordered-ish dither that only exists to
+     stop banding in the sky gradient. It does not scale with speed and is
+     below the threshold of visibility on a still frame. */
+  float d = hash(floor(uv * uRes * 0.5)) - 0.5;
+  col += d * 0.0035;
 
   // The scene target is sRGB, so the sampler handed us linear values. A raw
   // ShaderMaterial gets no automatic output conversion, so encode by hand.
@@ -215,9 +230,10 @@ export class PostFX {
     const s = st.settings || {};
     const t = st.speedT;
     u.uSpeedT.value = t;
-    // Both effects stay out of the way until ~230 speed, then ramp to 500.
-    u.uBlur.value = Math.max(0, (t - 0.46)) * 0.105 * (s.motionBlur ?? 1);
-    u.uLines.value = Math.max(0, (t - 0.50) / 0.5) * 0.62 * (s.speedLines ?? 1);
+    // Speed lines start around 200 and build smoothly; the edge streak waits
+    // until 300+ and stays gentle. Neither ever touches the middle of frame.
+    u.uBlur.value = Math.max(0, (t - 0.60) / 0.40) * 0.055 * (s.motionBlur ?? 1);
+    u.uLines.value = Math.max(0, (t - 0.40) / 0.60) * 0.85 * (s.speedLines ?? 1);
     u.uHurt.value = this.hurt;
     u.uLowHP.value = st.hp !== undefined ? Math.max(0, 1 - st.hp / 90) : 0;
     u.uFlash.value = this.flash;

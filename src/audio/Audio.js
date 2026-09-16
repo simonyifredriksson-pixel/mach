@@ -321,6 +321,48 @@ export class AudioSystem {
     this._tone({ freq: 110, slideTo: 50, dur: 0.18, type: 'sine', gain: (0.1 + t * 0.25) * gain, pan });
   }
 
+  /* ------------------------------------------------------------ grapple */
+
+  grappleFire(pos, hit) {
+    if (!this.ready) return;
+    const { gain, pan } = this._spatial(pos, 420);
+    // Pneumatic launch: a hard thunk plus the line paying out.
+    this._noiseBurst({ dur: 0.07, type: 'highpass', freq: 1800, gain: 0.30 * gain, pan });
+    this._tone({ freq: 180, slideTo: 90, dur: 0.10, type: 'square', gain: 0.16 * gain, pan });
+    if (hit) this._noiseBurst({ dur: 0.34, type: 'bandpass', freq: 3000, q: 1.5, gain: 0.10 * gain, sweep: 0.45, pan });
+    else this._tone({ freq: 300, slideTo: 140, dur: 0.22, type: 'sawtooth', gain: 0.07 * gain, pan });
+  }
+
+  grappleHit(pos) {
+    if (!this.ready) return;
+    const { gain, pan } = this._spatial(pos, 500);
+    // Bite: metal on stone, then the rope going taut.
+    this._noiseBurst({ dur: 0.05, type: 'highpass', freq: 3600, gain: 0.34 * gain, pan });
+    this._tone({ freq: 900, slideTo: 260, dur: 0.16, type: 'triangle', gain: 0.16 * gain, pan });
+    this._tone({ freq: 70, slideTo: 44, dur: 0.24, type: 'sine', gain: 0.22 * gain, pan });
+    // Reel whir.
+    this._noiseBurst({ dur: 0.5, type: 'bandpass', freq: 1400, q: 5, gain: 0.09 * gain, sweep: 1.8, pan });
+  }
+
+  grappleRelease(pos, speed) {
+    if (!this.ready) return;
+    const { gain, pan } = this._spatial(pos, 420);
+    const t = clamp01(speed / 500);
+    this._noiseBurst({ dur: 0.18, type: 'highpass', freq: 2200, gain: (0.12 + t * 0.14) * gain, sweep: 2.2, pan });
+    this._tone({ freq: 420 + t * 400, slideTo: 1400 + t * 900, dur: 0.16, type: 'triangle', gain: 0.09 * gain, pan });
+  }
+
+  /** The >350 speed strike. Heavier, sharper, and clearly a different sound. */
+  impactHeavy(dmg, speed, pos) {
+    if (!this.ready) return;
+    const { gain, pan } = this._spatial(pos, 700);
+    const t = clamp01((speed - 350) / 150);
+    this._noiseBurst({ dur: 0.045, type: 'highpass', freq: 4200, gain: (0.5 + t * 0.3) * gain, pan });
+    this._tone({ freq: 120 - t * 40, slideTo: 34, dur: 0.42, type: 'sine', gain: (0.5 + t * 0.3) * gain, pan });
+    this._tone({ freq: 2600 + t * 1200, slideTo: 700, dur: 0.30, type: 'triangle', gain: 0.16 * gain, pan });
+    this._noiseBurst({ dur: 0.30, type: 'lowpass', freq: 900, gain: 0.26 * gain, sweep: 0.3, pan });
+  }
+
   whiff(pos) {
     if (!this.ready) return;
     const { gain, pan } = this._spatial(pos, 300);

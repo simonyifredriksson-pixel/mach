@@ -165,4 +165,92 @@ export function blocked(world, ax, ay, az, bx, by, bz) {
   return false;
 }
 
+/* ------------------------------------------------------------- raycasting */
+
+const _ray = [];
+
+/**
+ * Ray vs the world. Walks the solid grid along the ray and slab-tests every
+ * candidate, then marches the terrain heightfield. Deterministic, so the client
+ * can predict a grapple shot and the server will agree.
+ *
+ * @returns {{x,y,z,dist,kind,normalY}|null} nearest hit within maxDist
+ */
+export function raycast(world, ox, oy, oz, dx, dy, dz, maxDist) {
+  let best = maxDist;
+  let hit = null;
+
+  // Broad phase: the AABB of the whole ray.
+  const ex = ox + dx * maxDist, ey = oy + dy * maxDist, ez = oz + dz * maxDist;
+  const ids = querySolids(world,
+    Math.min(ox, ex) - 4, Math.min(oz, ez) - 4,
+    Math.max(ox, ex) + 4, Math.max(oz, ez) + 4, _ray);
+
+  const inv = (v) => (Math.abs(v) < 1e-8 ? 1e8 : 1 / v);
+  const ix = inv(dx), iy = inv(dy), iz = inv(dz);
+
+  for (let i = 0; i < ids.length; i++) {
+    const o = world.solids[ids[i]];
+    if (o.k === 'bounds') continue;
+
+    // Slab test against the solid's AABB (cylinders and ramps use their box,
+    // which is close enough for a hook and keeps this cheap).
+    let t0 = (o.x0 - ox) * ix, t1 = (o.x1 - ox) * ix;
+    if (t0 > t1) { const t = t0; t0 = t1; t1 = t; }
+    let u0 = (o.y0 - oy) * iy, u1 = (o.y1 - oy) * iy;
+    if (u0 > u1) { const t = u0; u0 = u1; u1 = t; }
+    let v0 = (o.z0 - oz) * iz, v1 = (o.z1 - oz) * iz;
+    if (v0 > v1) { const t = v0; v0 = v1; v1 = t; }
+
+    const near = Math.max(t0, u0, v0, 0);
+    const far = Math.min(t1, u1, v1);
+    if (near > far || near >= best) continue;
+
+    if (o.t === SHAPE.RAMP) {
+      // Only accept the ramp if the ray is actually above its sloped surface
+      // at the entry point, so hooks do not catch on the empty wedge.
+      const px = ox + dx * near, pz = oz + dz * near, py = oy + dy * near;
+      const top = solidTop(o, clamp(px, o.x0, o.x1), clamp(pz, o.z0, o.z1));
+      if (top !== null && py < top - 6) continue;
+    }
+
+    best = near;
+    hit = {
+      x: ox + dx * near, y: oy + dy * near, z: oz + dz * near,
+      dist: near, kind: o.k, solid: ids[i],
+      normalY: Math.abs(u0 - near) < 1e-4 ? 1 : 0,
+    };
+  }
+
+  // Terrain: march until we are under the heightfield, then bisect.
+  {
+    const step = 14;
+    let prev = 0;
+    let prevAbove = oy - terrainHeight(world, ox, oz);
+    for (let d = step; d <= Math.min(best, maxDist); d += step) {
+      const x = ox + dx * d, y = oy + dy * d, z = oz + dz * d;
+      const above = y - terrainHeight(world, x, z);
+      if (above <= 0 && prevAbove > 0) {
+        let lo = prev, hi = d;
+        for (let k = 0; k < 8; k++) {
+          const mid = (lo + hi) * 0.5;
+          const my = oy + dy * mid;
+          if (my - terrainHeight(world, ox + dx * mid, oz + dz * mid) > 0) lo = mid; else hi = mid;
+        }
+        if (hi < best) {
+          best = hi;
+          hit = {
+            x: ox + dx * hi, y: oy + dy * hi, z: oz + dz * hi,
+            dist: hi, kind: 'terrain', solid: -1, normalY: 1,
+          };
+        }
+        break;
+      }
+      prev = d; prevAbove = above;
+    }
+  }
+
+  return hit;
+}
+
 export { terrainHeight };

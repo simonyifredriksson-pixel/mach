@@ -15,6 +15,7 @@ import { Input } from './core/Input.js';
 
 import { buildWorld } from './shared/WorldData.js';
 import { WSTATE, isVulnerable } from './shared/Combat.js';
+import { GSTATE, findAnchor } from './shared/Grapple.js';
 
 import { LoopbackTransport, WebSocketTransport, BOT_NAMES } from './net/Transport.js';
 import { GameState } from './game/GameState.js';
@@ -28,6 +29,7 @@ import { PALETTE } from './world/Materials.js';
 import { PostFX } from './fx/PostFX.js';
 import { WindField, SpeedTrail, GroundWake } from './fx/SpeedFX.js';
 import { CombatFX, BladeTrail } from './fx/CombatFX.js';
+import { GrappleFX } from './fx/GrappleFX.js';
 
 import { AudioSystem } from './audio/Audio.js';
 import { Profile } from './economy/Profile.js';
@@ -116,6 +118,7 @@ class Game {
     await step('WIRING EFFECTS', 72);
     this.post = new PostFX(this.renderer, this.scene, this.camera);
     this.combatFX = new CombatFX(this.scene, this.camera, this.ui);
+    this.grappleFX = new GrappleFX(this.scene, this.camera);
     this.wind = new WindField(this.scene);
     this.wake = new GroundWake(this.combatFX.smoke);
     this.rig = new CameraRig(this.camera, this.world, this.profile);
@@ -359,10 +362,28 @@ class Game {
     G.on('localJump', () => this.audio.jump(G.self.move.pos));
     G.on('localLand', (e) => {
       this.audio.land(e.landSpeed, G.self.move.pos);
-      if (e.landSpeed > 150) {
-        this.rig.addShake(clamp01(e.landSpeed / 500) * 0.5);
-        this.wake.burst(G.self.move.pos, e.landSpeed, G.self.move.groundKind);
+      this.rig.land(e.landSpeed);
+      this.avatars.get(G.selfId)?.avatar.land(e.landSpeed);
+      // Dust scales with the landing, but a gentle touchdown gets nothing.
+      if (e.landSpeed > 120) this.wake.burst(G.self.move.pos, e.landSpeed, G.self.move.groundKind);
+    });
+
+    G.on('localGrappleFire', ({ hit }) => {
+      this.audio.grappleFire(G.self.move.pos, hit);
+      this.rig.grappleFire();
+      if (!hit) {
+        this.hud.setStatus('NO ANCHOR', 'bad');
+        setTimeout(() => this.hud.setStatus(''), 420);
       }
+    });
+    G.on('localGrappleHook', ({ g }) => {
+      this.audio.grappleHit({ x: g.ax, y: g.ay, z: g.az });
+      this.rig.grappleHook();
+      this._grappleBite(g);
+    });
+    G.on('localGrappleRelease', ({ speed }) => {
+      this.audio.grappleRelease(G.self.move.pos, speed);
+      this.rig.grappleRelease();
     });
 
     G.on('event', (ev) => {
@@ -384,7 +405,40 @@ class Game {
         case 'block':
           this.combatFX.blocked(new THREE.Vector3(ev.x, ev.y, ev.z));
           break;
+        case 'gfire':
+          if (ev.id !== selfId()) this.audio.grappleFire(this._entPos(ev.id), ev.hit);
+          break;
+        case 'ghook':
+          if (ev.id !== selfId()) {
+            this.audio.grappleHit({ x: ev.x, y: ev.y, z: ev.z });
+            this._grappleBite(ev);
+          }
+          break;
+        case 'grelease':
+          if (ev.id !== selfId()) this.audio.grappleRelease(this._entPos(ev.id), ev.s || 0);
+          break;
       }
+    });
+  }
+
+  /** Chips and dust where the hook bites. */
+  _grappleBite(g) {
+    const pos = new THREE.Vector3(g.ax, g.ay, g.az);
+    const c = new THREE.Color(0xd8dee8);
+    for (let i = 0; i < 12; i++) {
+      const a = Math.random() * Math.PI * 2;
+      this.combatFX.sparks.emit({
+        x: pos.x, y: pos.y, z: pos.z,
+        vx: Math.cos(a) * (40 + Math.random() * 90),
+        vy: Math.random() * 90,
+        vz: Math.sin(a) * (40 + Math.random() * 90),
+        color: c, size: 9 + Math.random() * 10, life: 0.24 + Math.random() * 0.2,
+        gravity: 260, drag: 2.4, alpha: 1,
+      });
+    }
+    this.combatFX.smoke.emit({
+      x: pos.x, y: pos.y, z: pos.z, color: new THREE.Color(0x9aa2ad),
+      size: 26, life: 0.4, gravity: -30, drag: 3, grow: 60, alpha: 0.5,
     });
   }
 
@@ -403,7 +457,6 @@ class Game {
     const yaw = this.gameState.entities.get(ev.a)?.render?.yaw ?? this.gameState.self.yaw;
 
     this.combatFX.impact(pos, ev.d, t, attackerSlash, yaw);
-    this.audio.impact(ev.d, ev.s, pos, ev.a === selfId);
 
     const av = this.avatars.get(ev.v);
     if (av) av.avatar.takeHit();
@@ -413,9 +466,22 @@ class Game {
       this.match.damageDealt += ev.d;
       if (ev.d > this.match.bestHit) { this.match.bestHit = ev.d; this.match.bestHitSpeed = ev.s; }
       this.hud.hit(ev.d);
-      this.rig.addKick(0.25 + t * 0.4);
+
+      // HIGH-SPEED HIT: strictly above 350 speed, attacker only, 0.3 s exactly.
+      const heavy = this.rig.impact(ev.s);
+      if (heavy) {
+        this.audio.impactHeavy(ev.d, ev.s, pos);
+        this.hud.highSpeedHit(ev.s, ev.d);
+        this.combatFX.heavyImpact(pos, ev.s, attackerSlash, yaw);
+      } else {
+        this.audio.impact(ev.d, ev.s, pos, true);
+        this.rig.addKick(0.22 + t * 0.3);
+      }
+
       if (this.profile.settings.showDamage) this.combatFX.numbers.spawn(pos, ev.d, { speed: ev.s });
       if (ev.d >= 200) this.hud.showBanner(`${Math.round(ev.d)} — AT ${ev.s}`, 'huge', 1.5);
+    } else {
+      this.audio.impact(ev.d, ev.s, pos, false);
     }
     if (ev.v === selfId) {
       this.match.damageTaken += ev.d;
@@ -577,12 +643,29 @@ class Game {
     G.selfRenderPos(this._selfPos);
 
     /* ---- camera ---- */
-    const turnRate = (this.input.yaw - this.prevYaw);
+    let turnRate = this.input.yaw - this.prevYaw;
+    if (turnRate > Math.PI) turnRate -= Math.PI * 2;
+    if (turnRate < -Math.PI) turnRate += Math.PI * 2;
     this.prevYaw = this.input.yaw;
     this.lastTurn = damp(this.lastTurn, turnRate / Math.max(dt, 1e-3), 8, dt);
+
+    const G_ = S.grapple;
+    const grappling = G_.state === GSTATE.ATTACHED;
+    let ropeSide = 0;
+    if (grappling) {
+      const rx = G_.ax - this._selfPos.x, rz = G_.az - this._selfPos.z;
+      ropeSide = (rx * Math.cos(this.input.yaw) - rz * Math.sin(this.input.yaw)) / Math.max(1, Math.hypot(rx, rz));
+    }
+
     this.rig.update(dt, this._selfPos, this.input.yaw, this.input.pitch, speed, {
-      velX: S.move.vel.x, velZ: S.move.vel.z, turnRate: clamp(this.lastTurn * 0.1, -1, 1),
+      velX: S.move.vel.x, velZ: S.move.vel.z, velY: S.move.vel.y,
+      turnRate: clamp(this.lastTurn * 0.1, -1, 1),
+      grappling, ropeSide,
     });
+
+    // Render-only hit-stop: the authority keeps ticking at full rate, only the
+    // animation and effect clocks briefly slow for the impact.
+    const adt = this.rig.consumeHitStop(dt);
 
     /* ---- avatars ---- */
     for (const ent of G.entities.values()) {
@@ -602,7 +685,8 @@ class Game {
 
       const cs = local ? S.combat.state : ent.combatState;
       const phase = local ? S.combat.phase : ent.phase;
-      a.avatar.update(dt, {
+      const grap = local ? S.grapple : ent.grapple;
+      a.avatar.update(adt, {
         speed: sp,
         grounded: local ? S.move.grounded : ent.grounded,
         yaw, pitch: local ? S.pitch : ent.render.pitch,
@@ -610,8 +694,15 @@ class Game {
         phase,
         swingIndex: local ? S.combat.swingIndex : ent.swingIndex,
         attackType: local ? S.combat.attackType : ent.attackType,
+        velY: local ? S.move.vel.y : 0,
+        turnRate: local ? clamp(this.lastTurn * 0.1, -1, 1) : 0,
+        grapple: grap,
         alive,
       });
+
+      // Cable + hook, for everyone.
+      if (alive && grap && grap.state !== GSTATE.IDLE) this.grappleFX.show(ent.id, grap, a.avatar);
+      else this.grappleFX.hide(ent.id);
 
       // Blade trail while the cut is live.
       const swinging = cs === WSTATE.WINDUP || cs === WSTATE.ACTIVE || (cs === WSTATE.RECOVER && phase < 0.3);
@@ -635,24 +726,38 @@ class Game {
       }
     }
     for (const [id, a] of this.avatars) {
-      if (!G.entities.has(id)) { this._disposeAvatar(a); this.avatars.delete(id); }
+      if (!G.entities.has(id)) {
+        this._disposeAvatar(a);
+        this.grappleFX.remove(id);
+        this.avatars.delete(id);
+      }
     }
 
     /* ---- world FX ---- */
     this.wind.update(dt, this.camera.position, S.move.vel, speed);
-    if (S.alive) this.wake.update(dt, this._selfPos, S.move.vel, speed, S.move.grounded, S.move.groundKind);
-    this.combatFX.update(dt);
+    if (S.alive && S.move.grounded) this.wake.update(dt, this._selfPos, S.move.vel, speed, true, S.move.groundKind);
+    this.combatFX.update(adt);
     this.sky.update(dt, this.camera, this._selfPos);
     this.audio.setListener(this.camera.position, this.camera.quaternion);
     this.audio.updateWind(speed, S.move.grounded);
 
     /* ---- HUD ---- */
     const vulnerable = isVulnerable(S.combat);
+    // Probe for an anchor a few times a second so the G tag can light up.
+    this._anchorTimer = (this._anchorTimer || 0) - dt;
+    if (this._anchorTimer <= 0) {
+      this._anchorTimer = 0.1;
+      this._canGrapple = G_.state === GSTATE.IDLE && S.alive
+        ? !!findAnchor(this.world, S.move.pos.x, S.move.pos.y, S.move.pos.z, this.input.yaw, this.input.pitch)
+        : false;
+    }
     this.hud.update(dt, {
       speed, hp: S.hp, credits: this.profile.credits,
       x: this._selfPos.x, z: this._selfPos.z,
       vulnerable,
       attacking: S.combat.state === WSTATE.WINDUP || S.combat.state === WSTATE.ACTIVE,
+      grappleState: G_.state,
+      canGrapple: this._canGrapple,
     });
     if (!S.alive) {
       if (this._deadSince === null || this._deadSince === undefined) this._deadSince = performance.now();

@@ -74,7 +74,8 @@ export class Sky {
     scene.background = new THREE.Color(0xb9c8d0);
 
     /* ------------------------------------------------------------ lights */
-    this.hemi = new THREE.HemisphereLight(0xcfe3f0, 0x2a2b30, 1.0);
+    // Generous sky fill: shadowed faces must still read as surfaces, not holes.
+    this.hemi = new THREE.HemisphereLight(0xd6e8f4, 0x3b4048, 1.45);
     scene.add(this.hemi);
 
     this.sun = new THREE.DirectionalLight(0xfff3d6, 2.0);

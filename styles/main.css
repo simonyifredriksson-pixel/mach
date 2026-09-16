@@ -161,6 +161,47 @@ html, body {
   40% { opacity: 1; transform: scale(1.18); }
   100% { opacity: 0; transform: scale(1.5); }
 }
+/* The >350 speed connect reads differently from a normal hit. */
+.hitmark.heavy i { background: var(--yellow); width: 4px; height: 22px; box-shadow: 0 0 10px var(--yellow); }
+.hitmark.go.heavy { animation: hitmHeavy .42s cubic-bezier(.16,.9,.3,1); }
+@keyframes hitmHeavy {
+  0% { opacity: 1; transform: scale(.4) rotate(-18deg); }
+  35% { opacity: 1; transform: scale(1.5) rotate(4deg); }
+  100% { opacity: 0; transform: scale(2.1) rotate(10deg); }
+}
+
+.speedhit {
+  position: absolute; left: 50%; top: -34px; transform: translateX(-50%);
+  display: flex; align-items: baseline; gap: 9px; opacity: 0; white-space: nowrap;
+}
+.speedhit b { font-family: var(--display); font-size: 40px; color: var(--yellow); line-height: 1; }
+.speedhit span { font-size: 14px; letter-spacing: .3em; color: var(--white); }
+.speedhit.go { animation: speedhit .85s cubic-bezier(.16,.9,.3,1); }
+@keyframes speedhit {
+  0% { opacity: 0; transform: translateX(-50%) translateY(14px) scale(.7); }
+  18% { opacity: 1; transform: translateX(-50%) translateY(0) scale(1.1); }
+  60% { opacity: 1; transform: translateX(-50%) translateY(-6px) scale(1); }
+  100% { opacity: 0; transform: translateX(-50%) translateY(-22px) scale(.95); }
+}
+
+/* Grapple readiness badge under the reticle. */
+.grapple-tag {
+  position: absolute; left: 50%; top: 62%; transform: translateX(-50%);
+  width: 21px; height: 21px; line-height: 21px; text-align: center;
+  font-size: 12px; font-weight: 700; letter-spacing: 0;
+  color: rgba(243,244,246,.30);
+  box-shadow: inset 0 0 0 1.5px rgba(243,244,246,.22);
+  transition: color .12s, box-shadow .12s, background .12s, transform .12s;
+}
+.grapple-tag.ready {
+  color: var(--cyan);
+  box-shadow: inset 0 0 0 1.5px var(--cyan), 0 0 12px rgba(34,198,232,.45);
+}
+.grapple-tag.firing { color: var(--ink); background: var(--cyan); box-shadow: none; transform: translateX(-50%) scale(1.1); }
+.grapple-tag.on {
+  color: var(--ink); background: var(--yellow); box-shadow: 0 0 16px rgba(242,197,17,.6);
+  transform: translateX(-50%) scale(1.15);
+}
 
 .hud-feed { position: absolute; left: 34px; top: 30px; width: 460px; display: flex; flex-direction: column; gap: 5px; }
 .feed-line {
@@ -343,10 +384,14 @@ html, body {
   width: min(620px, 52vw);
 }
 .menu-title {
-  font-family: var(--display); font-size: clamp(60px, 9vw, 132px); line-height: .82;
+  font-family: var(--display); font-size: clamp(40px, 6.4vw, 96px); line-height: .84;
   letter-spacing: -0.045em;
   background: var(--white); color: var(--ink); display: inline-block;
-  padding: 6px 18px 10px;
+  padding: 8px 18px 12px;
+}
+.menu-title span {
+  display: inline-block; background: var(--red); color: var(--white);
+  padding: 0 12px; margin-top: 4px;
 }
 .menu-tagline {
   margin-top: 10px; background: var(--ink); display: inline-block;

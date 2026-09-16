@@ -13,6 +13,7 @@
 import { CFG, speedT } from '../core/Config.js';
 import { clamp, clamp01, lerp, angleDelta } from '../core/Util.js';
 import { WSTATE, attackArc, bladeHits } from './Combat.js';
+import { GSTATE } from './Grapple.js';
 import { blocked } from './Physics.js';
 
 export function makeBotState(skill = 0.75) {
@@ -34,12 +35,14 @@ export function makeBotState(skill = 0.75) {
     wantDraw: true,
     jumpCd: 0,
     lastAttack: 0,
+    grappleCd: 2 + Math.random() * 6,
+    grapplePitch: 0,
   };
 }
 
 const CMD = {
   seq: 0, mx: 0, mz: 0, yaw: 0, pitch: 0,
-  sprint: false, jump: false, attack: false, sheathe: false,
+  sprint: false, jump: false, attack: false, sheathe: false, grapple: false,
 };
 
 export function botInput(sim, p, dt) {
@@ -164,10 +167,32 @@ export function botInput(sim, p, dt) {
   const aimRate = lerp(3.0, 7.5, skill);
   b.aimYaw += clamp(angleDelta(b.aimYaw, desired), -aimRate * dt, aimRate * dt);
 
+  /* ------------------------------------------------- grapple (skilled bots) */
+  // Better bots use the hook to close ground and to keep their speed up. They
+  // aim slightly high so they catch rooftops and gantries rather than kerbs.
+  b.grappleCd -= dt;
+  let wantGrapple = false;
+  if (p.grapple.state === GSTATE.IDLE) {
+    const eager = skill > 0.55 && b.grappleCd <= 0 && (speed < 330 || (alive && b.targetId != null));
+    if (eager && Math.random() < 0.03) {
+      wantGrapple = true;
+      b.grapplePitch = 0.18 + Math.random() * 0.34;
+      b.grappleCd = lerp(9, 3.5, skill) + Math.random() * 3;
+    }
+  } else if (p.grapple.state === GSTATE.ATTACHED) {
+    // Let go once the swing has paid off, or immediately if a target is close.
+    if (p.grapple.time > lerp(1.6, 0.8, skill) || (alive && Math.hypot(
+      sim.players.get(b.targetId).move.pos.x - pos.x,
+      sim.players.get(b.targetId).move.pos.z - pos.z) < 160)) {
+      wantGrapple = true;
+    }
+  }
+
   /* ------------------------------------------------------------- command */
   CMD.seq = 0;
   CMD.yaw = b.aimYaw;
-  CMD.pitch = 0;
+  CMD.pitch = wantGrapple && p.grapple.state === GSTATE.IDLE ? b.grapplePitch : 0;
+  CMD.grapple = wantGrapple;
   CMD.mz = 1;
   CMD.mx = alive && Math.hypot(goalX - pos.x, goalZ - pos.z) < 400 ? b.strafe * 0.6 : 0;
   CMD.sprint = wantSprint;

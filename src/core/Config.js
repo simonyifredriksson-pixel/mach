@@ -1,5 +1,5 @@
 /**
- * [MACH] — central balance & tuning table.
+ * VELOCITY RONIN — central balance & tuning table.
  *
  * Everything that defines how the game FEELS lives here. This file is shared
  * verbatim by the authoritative simulation (server / loopback authority) and by
@@ -42,7 +42,10 @@ export const CFG = {
   TURN_RATE_LOW: 12.0,     // rad/s of velocity re-aim at 0 speed
   TURN_RATE_HIGH: 1.15,    // rad/s at MAX_SPEED — barely steerable
   TURN_CURVE: 0.70,
-  AIR_TURN_MULT: 0.45,
+  // Airborne you keep your line but can still shape it — enough to correct a
+  // jump or set up a landing, never enough to reverse in mid-air.
+  AIR_TURN_MULT: 0.52,
+  AIR_STRAFE: 320,         // u/s^2 of pure lateral nudge while airborne
   AIR_ACCEL_MULT: 0.38,
   ATTACK_TURN_MULT: 0.45,  // committed during a swing
   ATTACK_ACCEL_MULT: 0.35,
@@ -90,6 +93,26 @@ export const CFG = {
   HIT_SPEED_LOSS: 0.22,    // victim sheds this fraction of speed on impact
   HIT_KNOCK: 55,           // + a shove along the blade direction
 
+  /* ------------------------------------------------------ grappling hook */
+  // The hook is a real object that travels, catches, and reels. It never
+  // teleports you: every unit of the pull is integrated through the same
+  // movement step as running, so momentum carries straight out of a release.
+  GRAPPLE_KEY_RANGE: 1000,   // max anchor distance
+  GRAPPLE_MIN_RANGE: 70,     // too close to be worth it
+  GRAPPLE_HOOK_SPEED: 2100,  // how fast the hook itself flies (u/s)
+  GRAPPLE_PULL: 1500,        // reel acceleration toward the anchor (u/s^2)
+  GRAPPLE_PULL_MIN: 520,     // floor so long grapples still feel strong
+  GRAPPLE_REEL: 240,         // rope shortening rate (u/s)
+  GRAPPLE_SWING_CTRL: 900,   // lateral steering authority while swinging
+  GRAPPLE_RELEASE_BOOST: 1.06,
+  GRAPPLE_DETACH_DIST: 36,   // auto-release when you arrive
+  GRAPPLE_ARRIVE_POP: 95,    // upward kick on arrival: clears the lip, never a splat
+  GRAPPLE_ANCHOR_LIFT: 9,    // bias anchors up so you catch ledges, not faces
+  GRAPPLE_MAX_TIME: 4.0,     // safety: never stay latched forever
+  GRAPPLE_COOLDOWN: 0.28,
+  GRAPPLE_AIM_ASSIST: 0.075, // rad of search cone when the centre ray misses
+  GRAPPLE_ANCHOR_MIN_Y: -40, // relative to feet; stops grappling your own floor
+
   /* ------------------------------------------------------------- rounds */
   RESPAWN_TIME: 3.0,
   SPAWN_PROTECT: 1.4,
@@ -102,9 +125,29 @@ export const CFG = {
   CAM_DIST_FAST: 66,
   CAM_HEIGHT: 17,
   CAM_FOV: 72,
-  CAM_FOV_FAST: 108,
-  CAM_SHAKE: 0.85,
+  CAM_FOV_FAST: 102,
+  // NO ambient speed shake. Sprinting must never wobble the frame — speed is
+  // sold with FOV, boom length, streaks and wind, all of which stay readable.
+  // The camera only shakes for discrete events, and only briefly.
+  CAM_SHAKE: 0.0,
   MOUSE_SENS: 0.0022,
+
+  /* ------------------------------------------------- high-speed hit impact */
+  // Landing a strike above 350 speed punches the ATTACKER's camera for exactly
+  // 0.3 s: hard hit, then a smooth settle. Never the victim, never stacking.
+  IMPACT_SHAKE_MIN_SPEED: 350,   // strictly greater than — 350 itself does not
+  IMPACT_SHAKE_TIME: 0.30,       // exact duration
+  IMPACT_SHAKE_TIERS: [
+    { max: 400, amp: 1.00 },     // 351-400  strong
+    { max: 475, amp: 1.45 },     // 401-475  very strong
+    { max: 500, amp: 1.90 },     // 476-500  extremely powerful
+  ],
+  // Degrees of swing at amp 1.0. For scale: taking a hit swings ~1.3 deg, so a
+  // 351 strike lands at ~1.5 and a 500 strike at ~4 — unmistakably heavier
+  // than routine feedback, still nowhere near nauseating.
+  IMPACT_SHAKE_BASE: 7.0,
+  IMPACT_HITSTOP: 0.055,         // render-only pause; the sim never stops
+  IMPACT_FOV_KICK: 5.0,
 };
 
 /** Normalised 0..1 "how fast am I" used by every speed-scaled system. */

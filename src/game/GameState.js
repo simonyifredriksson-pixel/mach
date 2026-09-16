@@ -15,6 +15,7 @@ import { CFG } from '../core/Config.js';
 import { Emitter, clamp, damp, lerp, angleLerp } from '../core/Util.js';
 import { makeMoveState, stepPlayer } from '../shared/Movement.js';
 import { makeCombatState, stepCombat, WSTATE } from '../shared/Combat.js';
+import { makeGrappleState, stepGrapplePre, stepGrapplePost, GSTATE } from '../shared/Grapple.js';
 import { S2C } from '../net/Protocol.js';
 
 const MAX_PENDING = 120;
@@ -48,6 +49,7 @@ export class GameState extends Emitter {
       id: wel.id, name, color: 0,
       move: makeMoveState(),
       combat: makeCombatState(),
+      grapple: makeGrappleState(),
       yaw: 0, pitch: 0,
       hp: CFG.MAX_HEALTH, alive: true, protect: false,
       lastHitAt: -99, lastHurtAt: -99, vulnerable: false,
@@ -73,8 +75,23 @@ export class GameState extends Emitter {
       if (ev.whiff) this.emit('localWhiff', {});
       if (ev.draw) this.emit('localDraw', {});
       if (ev.sheathe) this.emit('localSheathe', {});
+
+      const firedBefore = s.grapple.fired;
+      stepGrapplePre(s.grapple, s.move, cmd, this.world, dt, s.yaw, s.pitch);
+      if (s.grapple.state === GSTATE.ATTACHED) {
+        s.move.mods.accel *= 0.22;
+        s.move.mods.turn *= 0.45;
+      }
+      if (s.grapple.fired !== firedBefore) {
+        this.emit('localGrappleFire', { hit: s.grapple.state !== GSTATE.IDLE, g: s.grapple });
+      }
+
       const mev = { jumped: false, landed: false, landSpeed: 0 };
       stepPlayer(s.move, cmd, this.world, dt, mev);
+      stepGrapplePost(s.grapple, s.move);
+
+      if (s.grapple.justAttached) this.emit('localGrappleHook', { g: s.grapple });
+      if (s.grapple.justReleased) this.emit('localGrappleRelease', { speed: s.grapple.releaseSpeed });
       if (mev.jumped) this.emit('localJump', {});
       if (mev.landed) this.emit('localLand', mev);
     }
@@ -114,6 +131,7 @@ export class GameState extends Emitter {
           buf: [], render: { x: ps.x, y: ps.y, z: ps.z, yaw: ps.ya, pitch: ps.pi, speed: 0 },
           hp: ps.hp, alive: !!ps.al, combatState: ps.ws, swingIndex: ps.wi, attackType: ps.wa,
           phase: 0, grounded: !!ps.g, vulnerable: false, protect: false,
+          grapple: { state: 0, ax: 0, ay: 0, az: 0, t: 1 },
           kills: ps.k, deaths: ps.d,
         };
         this.entities.set(ps.id, e);
@@ -121,6 +139,7 @@ export class GameState extends Emitter {
       }
       e.name = ps.n; e.hp = ps.hp; e.alive = !!ps.al; e.kills = ps.k; e.deaths = ps.d;
       e.vulnerable = !!ps.vu; e.protect = !!ps.pr;
+      e.grapple = { state: ps.gs | 0, ax: ps.gx, ay: ps.gy, az: ps.gz, t: ps.gt };
       e.buf.push({
         t: snap.st, x: ps.x, y: ps.y, z: ps.z, yaw: ps.ya, pitch: ps.pi,
         sp: ps.sp, ws: ps.ws, wi: ps.wi, wa: ps.wa, wp: ps.wp, g: ps.g, al: ps.al,
@@ -174,13 +193,29 @@ export class GameState extends Emitter {
     // frozen on both sides, so replaying would only invent a correction.
     const mods = s.move.mods;
     if (s.alive) {
+      const hooked = s.grapple.state === GSTATE.ATTACHED;
       for (const p of this.pending) {
         mods.turn = 1; mods.accel = 1; mods.friction = 1;
         applyModsForState(s.combat, mods);
+        if (hooked) { mods.accel *= 0.22; mods.turn *= 0.45; }
         stepPlayer(s.move, p.cmd, this.world, p.dt, null);
+        if (hooked) stepGrapplePost(s.grapple, s.move);
       }
     } else {
       this.pending.length = 0;
+    }
+
+    // Grapple authority: only adopt the server's view once it has actually
+    // seen everything we sent, otherwise a freshly fired hook flickers off.
+    if (this.pending.length === 0 && ps.gs !== undefined && ps.gs !== s.grapple.state) {
+      const g = s.grapple;
+      g.state = ps.gs;
+      g.ax = ps.gx; g.ay = ps.gy; g.az = ps.gz;
+      if (ps.gs === GSTATE.ATTACHED) {
+        g.rope = Math.hypot(g.ax - s.move.pos.x, g.ay - (s.move.pos.y + 13), g.az - s.move.pos.z);
+      } else if (ps.gs === GSTATE.IDLE) {
+        g.rope = 0;
+      }
     }
 
     const dx = predicted.x - s.move.pos.x;

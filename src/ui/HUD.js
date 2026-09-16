@@ -64,6 +64,8 @@ export class HUD {
     this.retWrap.appendChild(this.ret);
     this.retCtx = this.ret.getContext('2d');
     this.hitMark = EL('div', 'hitmark', this.retWrap, '<i></i><i></i><i></i><i></i>');
+    this.speedHit = EL('div', 'speedhit', this.retWrap, '');
+    this.grappleTag = EL('div', 'grapple-tag', this.retWrap, 'G');
 
     /* -------------------------------------------------------- kill feed */
     this.feed = EL('div', 'hud-feed', this.root);
@@ -91,6 +93,18 @@ export class HUD {
     void this.hitMark.offsetWidth;
     this.hitMark.classList.add('go');
     this.hitMark.style.setProperty('--h', String(clamp01(dmg / 250)));
+  }
+
+  /** The >350 speed strike gets its own readout, briefly. */
+  highSpeedHit(speed, dmg) {
+    this.hitFlash = 1.6;
+    this.hitMark.classList.remove('go', 'heavy');
+    void this.hitMark.offsetWidth;
+    this.hitMark.classList.add('go', 'heavy');
+    this.speedHit.innerHTML = `<b>${Math.round(dmg)}</b><span>AT ${Math.round(speed)}</span>`;
+    this.speedHit.classList.remove('go');
+    void this.speedHit.offsetWidth;
+    this.speedHit.classList.add('go');
   }
 
   pushFeed(text, cls) {
@@ -174,6 +188,15 @@ export class HUD {
       const f = this.killFeed[i];
       f.t -= dt;
       if (f.t <= 0) { f.el.classList.add('gone'); this.killFeed.splice(i, 1); }
+    }
+
+    // Grapple readiness: the tag lights the moment an anchor is in your sights,
+    // so you learn what the city will and will not give you.
+    const gs = st.grappleState | 0;
+    const cls = gs === 2 ? ' on' : gs === 1 ? ' firing' : st.canGrapple ? ' ready' : '';
+    if (cls !== this._grappleCls) {
+      this._grappleCls = cls;
+      this.grappleTag.className = 'grapple-tag' + cls;
     }
 
     this.hitFlash = Math.max(0, this.hitFlash - dt * 3);

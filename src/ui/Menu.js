@@ -36,9 +36,9 @@ export class Menu extends Emitter {
     const main = EL('div', 'menu-main', this.el);
 
     const titleWrap = EL('div', 'menu-title-wrap', main);
-    EL('div', 'menu-title', titleWrap, '[MACH]');
+    EL('div', 'menu-title', titleWrap, 'VELOCITY<br><span>RONIN</span>');
     EL('div', 'menu-tagline', titleWrap, 'SPEED IS DAMAGE');
-    EL('div', 'menu-formula', titleWrap, 'DAMAGE = SPEED &times; 0.5 &nbsp;&middot;&nbsp; MAX 500');
+    EL('div', 'menu-formula', titleWrap, 'DAMAGE = SPEED &times; 0.5 &nbsp;&middot;&nbsp; MAX 500 &nbsp;&middot;&nbsp; <b>G</b> TO GRAPPLE');
 
     this.nav = EL('div', 'menu-nav', main);
     this.items = [];
@@ -309,6 +309,11 @@ export class Menu extends Emitter {
 }
 
 const TIPS = [
+  'TIP: Press G to grapple. Release with G again — you keep every unit of momentum you built.',
+  'TIP: Sprint, jump, grapple a roof, release at the top of the arc. That is the whole game.',
+  'TIP: The G on your reticle lights up when something in front of you can be hooked.',
+  'TIP: Hit someone above 350 speed and you will feel it. So will they.',
+  'TIP: A grapple swing is a pendulum. Let it carry you instead of fighting it.',
   'TIP: Missing a swing costs you half a second of steering. At 400 that is 200 units of nothing.',
   'TIP: The reticle wedge is your real hit arc. If it is thin, you need to be right.',
   'TIP: Ramps and the hill road feed gravity into your speed. Downhill is free damage.',

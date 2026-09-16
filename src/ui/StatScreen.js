@@ -35,7 +35,7 @@ export class StatScreen {
 
     /* --------------------------------------------------------- headline */
     const head = EL('div', 'st-head', wrap);
-    EL('div', 'st-title', head, '[MACH]');
+    EL('div', 'st-title', head, 'VELOCITY RONIN');
     EL('div', 'st-sub', head, 'MERIDIAN DISTRICT &middot; LIVE TELEMETRY');
     this.headName = EL('div', 'st-name', head, 'RUNNER');
 
@@ -99,7 +99,7 @@ export class StatScreen {
     this.board = EL('div', 'st-board', boardBox);
 
     EL('div', 'st-footer', wrap,
-      'HOLD <b>TAB</b> &nbsp;&middot;&nbsp; <b>SHIFT</b> SPRINT &nbsp;&middot;&nbsp; <b>LMB</b> SLASH &nbsp;&middot;&nbsp; <b>R</b> DRAW / SHEATHE &nbsp;&middot;&nbsp; <b>SPACE</b> JUMP &nbsp;&middot;&nbsp; <b>ESC</b> MENU');
+      '<b>SHIFT</b> SPRINT &nbsp;&middot;&nbsp; <b>SPACE</b> JUMP &nbsp;&middot;&nbsp; <b>G</b> GRAPPLE / RELEASE &nbsp;&middot;&nbsp; <b>LMB</b> SLASH &nbsp;&middot;&nbsp; <b>R</b> DRAW / SHEATHE &nbsp;&middot;&nbsp; HOLD <b>TAB</b> &nbsp;&middot;&nbsp; <b>ESC</b> MENU');
   }
 
   show(v) {

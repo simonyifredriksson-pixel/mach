@@ -108,7 +108,12 @@ export function facadeMaterial(color, opts = {}) {
         float h21(vec2 p){ return fract(sin(dot(p, vec2(41.3, 289.1))) * 43758.5453); }`)
       .replace('#include <color_fragment>', `#include <color_fragment>
         {
-          float vertical = 1.0 - step(0.55, abs(vWNrm.y));
+          // Fade the window grid out with distance. Up close it is detail; at
+          // 600+ units it is a shimmering moire, and this is a game about
+          // moving at 500 units a second.
+          float camDist = length(vWPos - cameraPosition);
+          float detail = 1.0 - smoothstep(420.0, 1000.0, camDist);
+          float vertical = (1.0 - step(0.55, abs(vWNrm.y))) * detail;
           float u = abs(vWNrm.x) > 0.5 ? vWPos.z : vWPos.x;
           float fy = vWPos.y / uFloorH;
           float fu = u / uBarW;

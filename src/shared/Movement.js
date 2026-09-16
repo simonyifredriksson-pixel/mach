@@ -33,6 +33,7 @@ export function makeMoveState() {
     jumpBuffer: 0,
     wasGrounded: true,
     landImpact: 0,
+    airTime: 0,
     mods: { turn: 1, accel: 1, friction: 1 },
   };
 }
@@ -112,6 +113,23 @@ export function stepPlayer(p, input, world, dt, ev) {
     vx *= k; vz *= k;
   }
 
+  /* --------------------------------------------------------- air control */
+  // Airborne, the input gets a pure lateral nudge on top of the (reduced)
+  // steering above. It is enough to shape a jump, thread a gap or line up a
+  // landing — and far too little to reverse a 400-speed commitment.
+  if (!p.grounded && wishMag > 0.02 && speed > 1) {
+    const cx = vx / speed, cz = vz / speed;
+    const along = wx * cx + wz * cz;
+    let sx = wx - cx * along, sz = wz - cz * along;
+    const sl = Math.hypot(sx, sz);
+    if (sl > 1e-4) {
+      sx /= sl; sz /= sl;
+      const auth = CFG.AIR_STRAFE * (1 - t * 0.55) * mods.accel;
+      vx += sx * auth * dt * wishMag;
+      vz += sz * auth * dt * wishMag;
+    }
+  }
+
   /* ------------------------------------------------------------ the slopes */
   if (p.grounded) {
     const slopeMag = Math.hypot(p.groundNX || 0, p.groundNZ || 0);
@@ -162,8 +180,9 @@ export function stepPlayer(p, input, world, dt, ev) {
   p.slope = 1 - g.ny;
 
   const wasGrounded = p.grounded;
+  p.airTime = p.grounded ? 0 : p.airTime + dt;
   if (p.vel.y <= 0 && p.pos.y <= g.y + LAND_SNAP) {
-    if (!wasGrounded && ev) { ev.landed = true; ev.landSpeed = -p.vel.y; }
+    if (!wasGrounded && ev) { ev.landed = true; ev.landSpeed = -p.vel.y; ev.airTime = p.airTime; }
     p.pos.y = g.y;
     p.vel.y = 0;
     p.grounded = true;
