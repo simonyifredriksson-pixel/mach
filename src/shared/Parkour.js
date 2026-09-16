@@ -206,8 +206,7 @@ export function stepParkourPre(pk, move, input, world, dt, time, grappling) {
     const front = probe(world, pos, fx, fz, reach);
     if (isVertical(front)) {
       const facing = -(fx * front.nx + fz * front.nz);       // 1 = dead on
-      const sameWall = pk.lastNX * front.nx + pk.lastNZ * front.nz > 0.9
-        && time - pk.lastWallAt < CFG.WALLRUN_REATTACH_TIME;
+      const sameWall = pk.lastNX * front.nx + pk.lastNZ * front.nz > 0.9;
       if (!sameWall && facing > 0.72 && speed > CFG.WALLCLIMB_MIN_SPEED && input.mz > 0.3) {
         pk.state = PSTATE.WALLCLIMB;
         pk.timer = 0;
@@ -226,9 +225,10 @@ export function stepParkourPre(pk, move, input, world, dt, time, grappling) {
       const dx = leftX * side, dz = leftZ * side;
       const hit = probe(world, pos, dx, dz, reach);
       if (!isVertical(hit)) continue;
-      const sameWall = pk.lastNX * hit.nx + pk.lastNZ * hit.nz > 0.9
-        && time - pk.lastWallAt < CFG.WALLRUN_REATTACH_TIME;
-      if (sameWall) continue;
+      // ONE RUN PER WALL until you touch the ground or a different surface.
+      // Without this you can kick a wall, re-grab the same wall, and ratchet a
+      // tower into the sky — the entry pop cancels the fall every time.
+      if (pk.lastNX * hit.nx + pk.lastNZ * hit.nz > 0.9) continue;
       // You must be travelling ALONG the surface, not into it.
       const intoWall = -(fx * hit.nx + fz * hit.nz);
       if (Math.abs(intoWall) > Math.sin(CFG.WALLRUN_ALIGN + 0.55)) continue;
@@ -244,7 +244,12 @@ export function stepParkourPre(pk, move, input, world, dt, time, grappling) {
       // like being caught and flung, never like hitting something.
       const d = vel.x * hit.nx + vel.z * hit.nz;
       if (d < 0) { vel.x -= hit.nx * d; vel.z -= hit.nz * d; }
-      vel.y = Math.max(vel.y, CFG.WALLRUN_ENTRY_UP * clamp01(speed / 320));
+      // The entry pop only helps if you arrived travelling roughly level. It
+      // must never cancel a genuine fall, or catching a wall becomes free
+      // altitude.
+      if (vel.y > -160) {
+        vel.y = Math.max(vel.y, CFG.WALLRUN_ENTRY_UP * clamp01(speed / 320));
+      }
       return;
     }
   }
@@ -254,7 +259,10 @@ export function stepParkourPre(pk, move, input, world, dt, time, grappling) {
   // biggest contributor to "the movement never feels interrupted".
   if (pk.state === PSTATE.NONE && speed > CFG.VAULT_MIN_SPEED && pk.vaultCooldown <= 0) {
     const fx = vel.x / speed, fz = vel.z / speed;
-    const hit = probe(world, pos, fx, fz, CFG.PLAYER_RADIUS + 12);
+    // Look further ahead than the body: at top speed you cross 25 units per
+    // tick, so a short probe would miss the ledge and you would hit the wall.
+    const look = CFG.PLAYER_RADIUS + 12 + speed * 0.06;
+    const hit = probe(world, pos, fx, fz, look);
     if (hit && Math.abs(hit.ny) < 0.5 && hit.top !== undefined) {
       const rise = hit.top - pos.y;
       if (rise > CFG.STEP_HEIGHT && rise < CFG.VAULT_MAX_RISE) {

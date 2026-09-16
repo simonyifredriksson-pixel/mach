@@ -10,6 +10,21 @@
  * number the HUD shows. MAX_SPEED 500 ~= 50 m/s ~= 180 km/h.
  */
 
+/**
+ * WORLD RUSH.
+ *
+ * The speed NUMBER is fixed by the design: 0-500, and damage is speed x 0.5.
+ * How much world you cross per point of that number is a free parameter, and
+ * this is it. At 3.0 a reading of 500 moves you 1500 units every second —
+ * 150 m/s, 540 km/h, the whole 5.2 km district in three and a half seconds.
+ *
+ * It is applied to position integration, which is mathematically identical to
+ * scaling every velocity and acceleration in the game at once: jump arcs,
+ * grapple pulls, wall kicks and slides all grow together, so nothing has to be
+ * retuned relative to anything else and the numbers on screen never change.
+ */
+export const WORLD_RUSH = 2.4;
+
 export const CFG = {
   /* ---------------------------------------------------------------- core */
   MAX_SPEED: 500,          // hard ceiling — never exceeded, ever
@@ -25,11 +40,12 @@ export const CFG = {
 
   /* ----------------------------------------------------------- movement */
   WALK_MAX: 115,           // no sprint
-  // Roughly 2.5-3.5 s from a walk to 500 on a clean straight, and the last
-  // 50 units of that take almost a second. Top speed is earned, not toggled.
-  ACCEL_BASE: 620,         // u/s^2 at a standstill
+  // About 2 s from a walk to 500, covering ~1.4 km of ground doing it. Quick
+  // enough that top speed is reachable on real stretches of the district now
+  // that every stretch goes past 2.4x faster; slow enough to still be earned.
+  ACCEL_BASE: 900,         // u/s^2 at a standstill
   ACCEL_FALLOFF: 1.25,     // higher = harder to reach top speed
-  ACCEL_MIN: 34,           // the last stretch to 500 is a grind
+  ACCEL_MIN: 62,           // the last stretch to 500 is still a grind
   FRICTION_BASE: 250,      // decel with no input
   FRICTION_DRAG: 0.55,     // + this * speed
   BRAKE_DECEL: 900,        // holding against your own velocity
@@ -39,8 +55,11 @@ export const CFG = {
   // you go, the less you can change your mind.
   // At 0: ~690 deg/s, instant. At 250: ~250 deg/s. At 500: 66 deg/s, which is
   // a 400-unit turning circle — you commit to a line long before you arrive.
+  // Turning circle = speed / turn rate, and speed now buys 2.4x the distance,
+  // so the same rad/s is a far bigger arc. Raised to keep 500 committal rather
+  // than impossible: at top speed you carve an ~800 unit circle.
   TURN_RATE_LOW: 12.0,     // rad/s of velocity re-aim at 0 speed
-  TURN_RATE_HIGH: 1.15,    // rad/s at MAX_SPEED — barely steerable
+  TURN_RATE_HIGH: 1.55,    // rad/s at MAX_SPEED — a wide, committed arc
   TURN_CURVE: 0.70,
   // Airborne you keep your line but can still shape it — enough to correct a
   // jump or set up a landing, never enough to reverse in mid-air.
@@ -64,16 +83,18 @@ export const CFG = {
   PLAYER_HEIGHT: 18,
   STEP_HEIGHT: 7,
   HIT_SPHERE_Y: 10,        // torso centre, from feet
-  HIT_SPHERE_R: 8.5,
+  HIT_SPHERE_R: 11.5,
 
   /* ------------------------------------------------------------- katana */
   // Reach and arc both TIGHTEN with speed. Big damage demands real precision.
-  REACH_LOW: 36,
-  REACH_HIGH: 27,
+  // Reach is scaled for WORLD_RUSH: you now cross 25 units per tick at top
+  // speed, so a 36-unit blade would be geometrically impossible to land.
+  REACH_LOW: 66,
+  REACH_HIGH: 48,
   ARC_LOW: 1.30,           // half-angle rad at low speed (~75 deg)
   ARC_HIGH: 0.42,          // half-angle rad at 500 (~24 deg)
   ARC_CURVE: 0.80,
-  VERTICAL_REACH: 22,
+  VERTICAL_REACH: 34,
 
   SWING: {                 // drawn-blade slash
     windup: 0.115,
@@ -116,7 +137,10 @@ export const CFG = {
   WALLKICK_BUFFER: 0.14,
 
   WALLCLIMB_MAX_TIME: 0.55,  // straight up a wall you hit head-on
-  WALLCLIMB_ACCEL: 1250,
+  // Height is scaled by WORLD_RUSH like everything else, so this buys roughly
+  // one jump's worth of climb. It used to buy nine, which let you ladder a
+  // tower into the sky.
+  WALLCLIMB_ACCEL: 420,
   WALLCLIMB_MIN_SPEED: 120,
   WALLCLIMB_COST: 0.55,      // horizontal speed converted into height
 
@@ -137,15 +161,16 @@ export const CFG = {
   // The hook is a real object that travels, catches, and reels. It never
   // teleports you: every unit of the pull is integrated through the same
   // movement step as running, so momentum carries straight out of a release.
-  GRAPPLE_KEY_RANGE: 1000,   // max anchor distance
-  GRAPPLE_MIN_RANGE: 70,     // too close to be worth it
-  GRAPPLE_HOOK_SPEED: 2100,  // how fast the hook itself flies (u/s)
+  GRAPPLE_KEY_RANGE: 1700,   // max anchor distance
+  GRAPPLE_MIN_RANGE: 90,     // too close to be worth it
+  GRAPPLE_HOOK_SPEED: 5200,  // the hook always outruns you, even at 500
   GRAPPLE_PULL: 1500,        // reel acceleration toward the anchor (u/s^2)
   GRAPPLE_PULL_MIN: 520,     // floor so long grapples still feel strong
   GRAPPLE_REEL: 240,         // rope shortening rate (u/s)
   GRAPPLE_SWING_CTRL: 900,   // lateral steering authority while swinging
   GRAPPLE_RELEASE_BOOST: 1.06,
-  GRAPPLE_DETACH_DIST: 36,   // auto-release when you arrive
+  GRAPPLE_DETACH_DIST: 85,   // auto-release on arrival, wide enough that 25
+                             // units of travel per tick cannot skip past it
   GRAPPLE_ARRIVE_POP: 95,    // upward kick on arrival: clears the lip, never a splat
   GRAPPLE_ANCHOR_LIFT: 9,    // bias anchors up so you catch ledges, not faces
   GRAPPLE_MAX_TIME: 4.0,     // safety: never stay latched forever
@@ -171,6 +196,10 @@ export const CFG = {
   // The camera only shakes for discrete events, and only briefly.
   CAM_SHAKE: 0.0,
   MOUSE_SENS: 0.0022,
+  // A routine jump lands at ~215 u/s and must produce NO camera response at
+  // all. Only a genuine drop registers, and only proportionally.
+  LAND_DIP_MIN: 300,
+  LAND_DIP_FULL: 900,
 
   /* ------------------------------------------------- high-speed hit impact */
   // Landing a strike above 350 speed punches the ATTACKER's camera for exactly

@@ -70,11 +70,16 @@ export class CameraRig {
   addShake(amount) { this.softShake = Math.min(1.1, this.softShake + amount); }
   addKick(amount) { this.fovKick = Math.min(8, this.fovKick + amount * 6); }
 
-  /** Landing spring. `power` is the downward speed that was arrested. */
+  /**
+   * Landing dip. A normal jump produces NOTHING — you have to actually come
+   * down hard before the camera acknowledges it. The spring below is critically
+   * damped, so even a heavy landing dips once and returns; it never bounces.
+   */
   land(power) {
-    const t = clamp01(power / 420);
-    this.landVel -= 2.6 + t * 9.5;
-    if (t > 0.45) this.addShake(t * 0.32);
+    if (power < CFG.LAND_DIP_MIN) return;
+    const t = clamp01((power - CFG.LAND_DIP_MIN) / (CFG.LAND_DIP_FULL - CFG.LAND_DIP_MIN));
+    this.landVel -= t * t * 9.0;
+    if (t > 0.80) this.addShake((t - 0.80) * 1.4);
   }
 
   grappleFire() { this.distKick += 4; }
@@ -168,18 +173,20 @@ export class CameraRig {
     this.leadX = damp(this.leadX, (opts.velX || 0) * inv * leadAmt, 3.5, dt);
     this.leadZ = damp(this.leadZ, (opts.velZ || 0) * inv * leadAmt, 3.5, dt);
 
-    /* ---- landing spring ---- */
-    this.landVel += -this.landDip * 150 * dt;     // stiffness
-    this.landVel *= Math.exp(-11 * dt);           // damping
+    /* ---- landing dip: CRITICALLY damped, so it returns without bouncing ---- */
+    const K = 150;
+    const C = 2 * Math.sqrt(K);                   // zeta = 1 exactly
+    this.landVel += (-this.landDip * K - this.landVel * C) * dt;
     this.landDip += this.landVel * dt;
     if (Math.abs(this.landDip) < 0.002 && Math.abs(this.landVel) < 0.01) { this.landDip = 0; this.landVel = 0; }
 
-    // Vertical give on the way up and down, so jumps feel weighted.
-    const airLag = clamp((opts.velY || 0) * -0.012, -3.5, 3.5);
-    this.heightOffset = damp(this.heightOffset, airLag, 7, dt);
+    // NOTE: there is deliberately no velocity-driven "air lag" here. It was a
+    // second oscillator layered on top of the jump arc, and between the two the
+    // camera reversed direction several times per jump. Jumping is now a clean
+    // follow of a single value.
 
     const pivotX = focus.x + this.leadX;
-    const pivotY = focus.y + this.height + t * 3.0 + this.landDip + this.heightOffset;
+    const pivotY = focus.y + this.height + t * 3.0 + this.landDip;
     const pivotZ = focus.z + this.leadZ;
 
     /* ---- shake: events only. There is no ambient term at all. ---- */
@@ -242,11 +249,14 @@ export class CameraRig {
     const camZ = pivotZ + dz * dist;
 
     if (!this.hasSmooth) { this.smooth.set(camX, camY, camZ); this.hasSmooth = true; }
-    // Stiff enough that aiming is 1:1, soft enough that nothing ever snaps.
-    const k = 1 - Math.exp(-30 * dt);
-    this.smooth.x += (camX - this.smooth.x) * k;
-    this.smooth.y += (camY - this.smooth.y) * k;
-    this.smooth.z += (camZ - this.smooth.z) * k;
+    // Horizontal is stiff so aiming stays 1:1. VERTICAL IS DELIBERATELY SOFTER:
+    // it absorbs the step-by-step bob of running over terrain and turns the
+    // jump arc into one clean sweep instead of a rigid copy of the player's Y.
+    const kH = 1 - Math.exp(-30 * dt);
+    const kV = 1 - Math.exp(-13 * dt);
+    this.smooth.x += (camX - this.smooth.x) * kH;
+    this.smooth.y += (camY - this.smooth.y) * kV;
+    this.smooth.z += (camZ - this.smooth.z) * kH;
 
     this.camera.position.copy(this.smooth).add(this.impulse);
     this.impulse.multiplyScalar(Math.exp(-11 * dt));

@@ -74,11 +74,12 @@ export class Sky {
     scene.background = new THREE.Color(0xb9c8d0);
 
     /* ------------------------------------------------------------ lights */
-    // Generous sky fill: shadowed faces must still read as surfaces, not holes.
-    this.hemi = new THREE.HemisphereLight(0xd6e8f4, 0x3b4048, 1.45);
+    // Generous sky fill. Shadowed faces must read as lit surfaces, never as
+    // holes — a dark game is not the same thing as an atmospheric one.
+    this.hemi = new THREE.HemisphereLight(0xdcecf8, 0x59616e, 2.05);
     scene.add(this.hemi);
 
-    this.sun = new THREE.DirectionalLight(0xfff3d6, 2.0);
+    this.sun = new THREE.DirectionalLight(0xfff0cf, 2.7);
     this.sun.position.copy(this.sunDir).multiplyScalar(900);
     this.sun.castShadow = true;
     const s = this.sun.shadow;
@@ -92,7 +93,8 @@ export class Sky {
     scene.add(this.sun);
     scene.add(this.sun.target);
 
-    this.fill = new THREE.DirectionalLight(0x8fb4d8, 0.4);
+    // Cool bounce from the opposite side so nothing goes fully black.
+    this.fill = new THREE.DirectionalLight(0x9cc0e4, 0.75);
     this.fill.position.set(-0.5, 0.35, -0.7).multiplyScalar(500);
     scene.add(this.fill);
 

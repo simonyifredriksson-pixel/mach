@@ -56,9 +56,19 @@ function authoredHeight(x, z) {
     h += edge * (Math.sin(x * 0.0021) * Math.cos(z * 0.0017) * 34 + Math.sin(z * 0.0033) * 12);
   }
   // Sunken expressway — a banked N-S trench at x = 1250. Half-pipe for carving.
+  // It stops short of the three roads that cross it: those crossings stay solid
+  // ground so the Grand Boulevard and the ring road remain unbroken runs. A
+  // speed lane with a 78-unit wall in the middle of it is not a speed lane.
   {
     const d = Math.abs(x - 1250);
-    if (d < 320) h -= 88 * (1 - smoothstep(invLerp(120, 320, d)));
+    if (d < 320) {
+      const crossing = Math.max(
+        1 - smoothstep(invLerp(150, 330, Math.abs(z))),
+        1 - smoothstep(invLerp(140, 320, Math.abs(z - 1800))),
+        1 - smoothstep(invLerp(140, 320, Math.abs(z + 1800))),
+      );
+      h -= 88 * (1 - crossing) * (1 - smoothstep(invLerp(120, 320, d)));
+    }
   }
   // Tunnel cut through Terrace Hill (x from -2150 to -900 at z = 1460).
   {
@@ -428,6 +438,58 @@ function genProps(world, rng) {
     const a = (i / 8) * Math.PI * 2;
     push('banner', Math.cos(a) * 470, Math.sin(a) * 470, { y: 0, rot: a + Math.PI / 2, c: i % 3 });
   }
+
+  /* ---------------------------------------------------------- the hill */
+  // Rocks and boulders across the slopes, so the hill reads as terrain rather
+  // than a green ramp.
+  for (let i = 0; i < 150; i++) {
+    const a = rng() * Math.PI * 2, r = 260 + rng() * 980;
+    const x = -1450 + Math.cos(a) * r, z = 1480 + Math.sin(a) * r;
+    if (Math.abs(z - 1460) < 170 && x < -820) continue;
+    if (Math.abs(Math.max(Math.abs(x), Math.abs(z)) - 1800) < 130) continue;
+    if (Math.abs(x) > HALF - 80 || Math.abs(z) > HALF - 80) continue;
+    push('rock', x, z, { s: randRange(rng, 0.7, 2.6), rot: rng() * 6.28 });
+  }
+  // Undergrowth: low scrub filling the gaps between the pines.
+  for (let i = 0; i < 260; i++) {
+    const a = rng() * Math.PI * 2, r = 300 + rng() * 950;
+    const x = -1450 + Math.cos(a) * r, z = 1480 + Math.sin(a) * r;
+    if (Math.abs(z - 1460) < 190 && x < -820) continue;
+    if (Math.abs(Math.max(Math.abs(x), Math.abs(z)) - 1800) < 140) continue;
+    if (Math.abs(x) > HALF - 60 || Math.abs(z) > HALF - 60) continue;
+    push('scrub', x, z, { s: randRange(rng, 0.8, 1.9), rot: rng() * 6.28 });
+  }
+
+  /* ------------------------------------------------------ temple ground */
+  // A stone approach to the hilltop citadel: gates, lanterns and pillars.
+  for (let i = 0; i < 4; i++) {
+    const a = (i / 4) * Math.PI * 2 + Math.PI / 4;
+    push('torii', -1450 + Math.cos(a) * 340, 1480 + Math.sin(a) * 340, { rot: -a, s: 1.25 });
+  }
+  for (let i = 0; i < 16; i++) {
+    const a = (i / 16) * Math.PI * 2;
+    const r = 285 + (i % 2) * 48;
+    push('stonelamp', -1450 + Math.cos(a) * r, 1480 + Math.sin(a) * r, { s: randRange(rng, 0.9, 1.2) });
+  }
+  // Ruined pillars scattered down the north face.
+  for (let i = 0; i < 26; i++) {
+    const a = rng() * Math.PI * 2, r = 380 + rng() * 420;
+    push('pillar', -1450 + Math.cos(a) * r, 1480 + Math.sin(a) * r,
+      { s: randRange(rng, 0.7, 1.5), rot: rng() * 6.28 });
+  }
+
+  /* -------------------------------------------------------- bamboo park */
+  for (let i = 0; i < 420; i++) {
+    const a = rng() * Math.PI * 2, r = rng() * 430;
+    const x = 600 + Math.cos(a) * r, z = 2050 + Math.sin(a) * r;
+    if (Math.abs(x) > HALF - 60 || Math.abs(z) > HALF - 60) continue;
+    push('bamboo', x, z, { s: randRange(rng, 0.8, 1.6), rot: rng() * 6.28 });
+  }
+  for (let i = 0; i < 40; i++) {
+    const a = rng() * Math.PI * 2, r = rng() * 460;
+    push('stonelamp', 600 + Math.cos(a) * r, 2050 + Math.sin(a) * r, { s: randRange(rng, 0.8, 1.1) });
+  }
+
   return props;
 }
 

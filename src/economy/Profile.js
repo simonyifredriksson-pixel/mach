@@ -10,6 +10,7 @@ import { Emitter } from '../core/Util.js';
 import { DEFAULT_LOADOUT, getItem, CATALOG } from './Cosmetics.js';
 
 const KEY = 'mach.profile.v1';
+const SETTINGS_VERSION = 2;
 
 function blankStats() {
   return {
@@ -54,6 +55,17 @@ export class Profile extends Emitter {
       this.stats = { ...blankStats(), ...(d.stats || {}) };
       this.history = d.history || [];
       this.settings = { ...this.settings, ...(d.settings || {}) };
+
+      // Settings migration. Camera/look defaults are reset once so a value
+      // saved by an older build cannot leave someone stuck with an inverted
+      // look or effects they never chose.
+      if ((d.settingsVersion | 0) < SETTINGS_VERSION) {
+        this.settings.invertY = false;
+        this.settings.sensitivity = d.settings?.sensitivity ?? 1.0;
+        this.settings.shake = 1.0;
+        this.settings.motionBlur = 1.0;
+        this.settings.speedLines = 1.0;
+      }
     } catch (e) { /* corrupt save: start clean */ }
   }
 
@@ -67,6 +79,7 @@ export class Profile extends Emitter {
         stats: this.stats,
         history: this.history.slice(0, 40),
         settings: this.settings,
+        settingsVersion: SETTINGS_VERSION,
       }));
     } catch (e) { /* storage blocked — play on, just don't persist */ }
   }

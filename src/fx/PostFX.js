@@ -80,19 +80,40 @@ void main(){
     }
   }
 
-  /* ---- depth outline ---- */
-  if (uOutline > 0.0) {
+  /* ---- outline + contact shading ----
+     A FIRST-derivative edge test fires on every flat surface seen at a grazing
+     angle, because depth genuinely ramps across it — that was the speckled
+     "grain" covering the screen. This is a SECOND-derivative (Laplacian) test:
+     any linear depth ramp cancels exactly, so flat walls and floors are silent
+     at every angle and only real silhouettes survive. */
+  float d0 = linDepth(uv);
+  if (uOutline > 0.0 && d0 < uFar * 0.6) {
     vec2 px = 1.0 / uRes;
-    float d0 = linDepth(uv);
-    float d1 = linDepth(uv + vec2(px.x, 0.0));
-    float d2 = linDepth(uv + vec2(0.0, px.y));
-    float d3 = linDepth(uv - vec2(px.x, 0.0));
-    float d4 = linDepth(uv - vec2(0.0, px.y));
-    float g = abs(d1 - d0) + abs(d2 - d0) + abs(d3 - d0) + abs(d4 - d0);
-    // Scale threshold with distance so far buildings don't turn into mush.
-    float edge = smoothstep(d0 * 0.022 + 0.6, d0 * 0.055 + 2.4, g);
-    edge *= uOutline * (1.0 - smoothstep(2600.0, 4200.0, d0));
-    col = mix(col, col * 0.06, edge);
+    float dR = linDepth(uv + vec2(px.x, 0.0));
+    float dL = linDepth(uv - vec2(px.x, 0.0));
+    float dU = linDepth(uv + vec2(0.0, px.y));
+    float dD = linDepth(uv - vec2(0.0, px.y));
+    float lap = abs((dR + dL) * 0.5 - d0) + abs((dU + dD) * 0.5 - d0);
+    // Relative threshold: an edge must be a real step, not float noise.
+    float thresh = d0 * 0.010 + 0.8;
+    float edge = smoothstep(thresh, thresh * 3.2, lap);
+    edge *= uOutline * (1.0 - smoothstep(2400.0, 4200.0, d0));
+    col = mix(col, col * 0.10, edge * 0.85);
+
+    /* ---- cheap contact occlusion ----
+       Points that sit behind their surroundings get gently darkened. Eight
+       taps on a small ring, depth-only, no noise and no dither pattern. */
+    float ao = 0.0;
+    for (int i = 0; i < 8; i++) {
+      float a = float(i) * 0.7853981;
+      vec2 o = vec2(cos(a), sin(a)) * px * (7.0 + d0 * 0.004);
+      float ds = linDepth(uv + o);
+      float diff = d0 - ds;
+      ao += clamp(diff / (d0 * 0.02 + 3.0), 0.0, 1.0);
+    }
+    ao = clamp(ao / 8.0, 0.0, 1.0);
+    ao *= 1.0 - smoothstep(1800.0, 3600.0, d0);
+    col *= 1.0 - ao * 0.30;
   }
 
   /* ---- speed lines: clean directional strokes, strictly peripheral ---- */
@@ -133,12 +154,18 @@ void main(){
   }
   if (uFlash > 0.001) col = mix(col, uFlashColor, uFlash);
 
-  /* ---- dither ----
-     Not film grain: a fixed ±0.2/255 ordered-ish dither that only exists to
-     stop banding in the sky gradient. It does not scale with speed and is
-     below the threshold of visibility on a still frame. */
-  float d = hash(floor(uv * uRes * 0.5)) - 0.5;
-  col += d * 0.0035;
+  /* ---- grade ----
+     A soft filmic roll-off with a lifted toe. Highlights compress instead of
+     clipping to flat white, shadows open up instead of crushing to black, and
+     the midtones keep their colour. No grain, no dither, no noise is added to
+     this frame anywhere. */
+  col = max(col, vec3(0.0));
+  col = col * (1.0 + col * 0.42) / (1.0 + col);      // highlight roll-off
+  col = col * 0.94 + 0.030;                          // shadow lift
+  col = (col - 0.5) * 1.06 + 0.5;                    // gentle contrast
+  float lum2 = dot(col, vec3(0.299, 0.587, 0.114));
+  col = mix(vec3(lum2), col, 1.14);                  // a little more colour
+  col = max(col, vec3(0.0));
 
   // The scene target is sRGB, so the sampler handed us linear values. A raw
   // ShaderMaterial gets no automatic output conversion, so encode by hand.

@@ -105,13 +105,36 @@ export class WorldView {
     this._buildTerrain();
     this._buildSolids();
     this._buildProps();
+    this._buildWater();
+  }
+
+  /**
+   * Water in the sunken expressway: it is a canal, not a road cutting. Gives
+   * the district a reflective surface to break up all the concrete, and a
+   * reason for the three bridges to exist.
+   */
+  _buildWater() {
+    const geo = new THREE.PlaneGeometry(240, 5200, 1, 40);
+    const mat = new THREE.MeshStandardMaterial({
+      color: 0x2c5f78,
+      metalness: 0.85,
+      roughness: 0.18,
+      transparent: true,
+      opacity: 0.86,
+    });
+    const water = new THREE.Mesh(geo, mat);
+    water.rotation.x = -Math.PI / 2;
+    water.position.set(1250, -58, 0);
+    water.receiveShadow = true;
+    this.group.add(water);
+    this.water = water;
   }
 
   _materials() {
     return {
-      facadeDark: facadeMaterial(0x39404c, { floorHeight: 27, barWidth: 18 }),
-      facadeLight: facadeMaterial(0x4a5160, { floorHeight: 23, barWidth: 15, glass: 0x1b2230 }),
-      monumentMat: toon(0x474d58),
+      facadeDark: facadeMaterial(0x525b69, { floorHeight: 27, barWidth: 18, glass: 0x27303f }),
+      facadeLight: facadeMaterial(0x646d7c, { floorHeight: 23, barWidth: 15, glass: 0x2a3444 }),
+      monumentMat: toon(0x5a6170),
       ribbed: facadeMaterial(PALETTE.steel, { floorHeight: 58, barWidth: 9, glass: 0x363c47, lit: 0x363c47 }),
       steel: toon(PALETTE.steel),
       painted: toon(0xffffff),
@@ -301,6 +324,53 @@ export class WorldView {
         { g: new THREE.BoxGeometry(18, 2, 2), m: T(0, 58, 0), c: PALETTE.steel },
         { g: new THREE.BoxGeometry(13, 2, 2), m: T(0, 48, 0), c: PALETTE.steel },
         { g: new THREE.SphereGeometry(2.6, 6, 5), m: T(0, 72, 0), c: PALETTE.red },
+      ]),
+
+      /* ---- natural detail ---- */
+      rock: () => mergeParts([
+        { g: new THREE.DodecahedronGeometry(9, 0), m: T(0, 5, 0, 1.2, 0.8, 1.0, 0.4), c: 0x6a6f76 },
+        { g: new THREE.DodecahedronGeometry(6, 0), m: T(7, 3, 4, 1.0, 0.7, 1.1, 1.1), c: 0x5d626a },
+        { g: new THREE.DodecahedronGeometry(4, 0), m: T(-6, 2, -3, 1.1, 0.9, 0.9, 2.0), c: 0x767c84 },
+      ]),
+      scrub: () => mergeParts([
+        { g: new THREE.IcosahedronGeometry(5.5, 0), m: T(0, 3.5, 0, 1.3, 0.62, 1.2), c: 0x41552f },
+        { g: new THREE.IcosahedronGeometry(4.0, 0), m: T(5, 2.6, 3, 1.2, 0.6, 1.1, 0.8), c: 0x4c6136 },
+        { g: new THREE.IcosahedronGeometry(3.4, 0), m: T(-4, 2.2, -4, 1.1, 0.6, 1.2, 2.1), c: 0x39492a },
+      ]),
+      // Bamboo: tall, thin, slightly leaning — a forest of these reads well.
+      // Three stalks per cluster, five sides each: density comes from placing
+      // many clusters, not from spending triangles inside one.
+      bamboo: () => {
+        const parts = [];
+        for (let i = 0; i < 3; i++) {
+          const h = 74 + (i * 41 % 56);
+          const x = ((i * 53) % 15) - 7, z = ((i * 91) % 13) - 6;
+          const lean = (((i * 31) % 10) - 5) * 0.014;
+          parts.push({ g: new THREE.CylinderGeometry(1.0, 1.35, h, 5), m: T(x, h / 2, z, 1, 1, 1, lean), c: 0x74863f });
+          parts.push({ g: new THREE.ConeGeometry(7, 17, 5), m: T(x, h + 4, z, 1, 1, 1, lean), c: 0x5f7a35 });
+          parts.push({ g: new THREE.ConeGeometry(5, 12, 4), m: T(x + 3, h - 14, z, 1, 1, 1, lean + 0.6), c: 0x6b8540 });
+        }
+        return mergeParts(parts);
+      },
+      // Temple gate.
+      torii: () => mergeParts([
+        { g: new THREE.CylinderGeometry(2.4, 3.2, 54, 8), m: T(-17, 27, 0), c: 0x8e3b2c },
+        { g: new THREE.CylinderGeometry(2.4, 3.2, 54, 8), m: T(17, 27, 0), c: 0x8e3b2c },
+        { g: new THREE.BoxGeometry(52, 3.4, 5.5), m: T(0, 46, 0), c: 0x8e3b2c },
+        { g: new THREE.BoxGeometry(60, 4.2, 7.5), m: T(0, 53, 0), c: 0x6f2d21 },
+        { g: new THREE.BoxGeometry(8, 3.0, 4.5), m: T(0, 40, 0), c: 0x6f2d21 },
+      ]),
+      stonelamp: () => mergeParts([
+        { g: new THREE.CylinderGeometry(2.0, 2.8, 9, 7), m: T(0, 4.5, 0), c: 0x8a8f93 },
+        { g: new THREE.CylinderGeometry(3.4, 2.4, 4, 7), m: T(0, 11, 0), c: 0x9aa0a4 },
+        { g: new THREE.BoxGeometry(5.2, 5.0, 5.2), m: T(0, 15.5, 0), c: 0xa8adb0 },
+        { g: new THREE.ConeGeometry(5.2, 4.5, 6), m: T(0, 20, 0), c: 0x8a8f93 },
+        { g: new THREE.SphereGeometry(1.1, 6, 5), m: T(0, 22.5, 0), c: 0x9aa0a4 },
+      ]),
+      pillar: () => mergeParts([
+        { g: new THREE.CylinderGeometry(3.6, 4.4, 34, 9), m: T(0, 17, 0), c: 0x9ba0a3 },
+        { g: new THREE.BoxGeometry(11, 3, 11), m: T(0, 1.5, 0), c: 0x8b9094 },
+        { g: new THREE.BoxGeometry(9.5, 2.6, 9.5), m: T(0, 34, 0), c: 0x8b9094 },
       ]),
     };
 

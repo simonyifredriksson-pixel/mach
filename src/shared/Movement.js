@@ -10,7 +10,7 @@
  * this exact function, so corrections stay in the noise.
  */
 
-import { CFG, speedT } from '../core/Config.js';
+import { CFG, speedT, WORLD_RUSH } from '../core/Config.js';
 import { clamp, clamp01, lerp, angleDelta } from '../core/Util.js';
 import { groundInfo, resolveHorizontal, resolveCeiling } from './Physics.js';
 
@@ -165,10 +165,15 @@ export function stepPlayer(p, input, world, dt, ev) {
   if (!p.grounded) p.vel.y -= CFG.GRAVITY * (p.gravityScale ?? 1) * dt;
 
   /* ----------------------------------------------------------- integrate */
+  // WORLD_RUSH turns velocity into distance. Scaling it here is equivalent to
+  // scaling every velocity and acceleration in the game simultaneously, which
+  // is why no other constant has to change: arcs keep their shape, they just
+  // cover far more ground.
   const R = CFG.PLAYER_RADIUS, H = CFG.PLAYER_HEIGHT, STEP = CFG.STEP_HEIGHT;
-  const disp = speed * dt;
-  const sub = Math.min(4, Math.max(1, Math.ceil(disp / (R * 0.7))));
-  const sdt = dt / sub;
+  const rush = WORLD_RUSH;
+  const disp = speed * rush * dt;
+  const sub = Math.min(10, Math.max(1, Math.ceil(disp / (R * 0.7))));
+  const sdt = (dt / sub) * rush;
 
   for (let i = 0; i < sub; i++) {
     p.pos.x += p.vel.x * sdt;
@@ -176,7 +181,7 @@ export function stepPlayer(p, input, world, dt, ev) {
     resolveHorizontal(world, p.pos, p.vel, R, H, STEP);
   }
 
-  p.pos.y += p.vel.y * dt;
+  p.pos.y += p.vel.y * dt * rush;
   resolveCeiling(world, p.pos, p.vel, R, H, STEP);
 
   const g = groundInfo(world, p.pos.x, p.pos.z, p.pos.y, STEP, _g);

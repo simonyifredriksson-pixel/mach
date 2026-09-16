@@ -39,12 +39,53 @@ const _q = new THREE.Quaternion();
 const _e = new THREE.Euler();
 const _v = new THREE.Vector3();
 
-/** A box piece: size, offset, colour, optional rotation and taper. */
-function piece(w, h, d, x, y, z, color, rx = 0, ry = 0, rz = 0) {
-  return { g: new THREE.BoxGeometry(w, h, d), x, y, z, color, rx, ry, rz };
+/* ---------------------------------------------------------------------------
+   Smooth body parts. Everything below is a rounded, smooth-shaded primitive —
+   capsules, lathes, spheres and tori — rather than boxes, because a character
+   built from cubes reads as a prototype no matter how well it is animated.
+   Normals survive the merge, so limbs shade as continuous surfaces.
+--------------------------------------------------------------------------- */
+
+const _s1 = new THREE.Vector3(1, 1, 1);
+
+/** Rounded limb / cloth segment. */
+function capsule(r, len, color, x = 0, y = 0, z = 0, o = {}) {
+  return {
+    g: new THREE.CapsuleGeometry(r, len, 3, o.seg || 10),
+    x, y, z, color,
+    rx: o.rx || 0, ry: o.ry || 0, rz: o.rz || 0,
+    sx: o.sx ?? 1, sy: o.sy ?? 1, sz: o.sz ?? 1,
+  };
 }
-function cylPiece(rt, rb, h, seg, x, y, z, color, rx = 0, ry = 0, rz = 0) {
-  return { g: new THREE.CylinderGeometry(rt, rb, h, seg), x, y, z, color, rx, ry, rz };
+function ball(r, color, x = 0, y = 0, z = 0, o = {}) {
+  return {
+    g: new THREE.SphereGeometry(r, o.seg || 12, o.seg2 || 9),
+    x, y, z, color,
+    rx: o.rx || 0, ry: o.ry || 0, rz: o.rz || 0,
+    sx: o.sx ?? 1, sy: o.sy ?? 1, sz: o.sz ?? 1,
+  };
+}
+/** Body of revolution from [radius, height] pairs — torsos, hoods, skirts. */
+function lathe(profile, color, x = 0, y = 0, z = 0, o = {}) {
+  const pts = profile.map(([r, h]) => new THREE.Vector2(Math.max(0.001, r), h));
+  return {
+    g: new THREE.LatheGeometry(pts, o.seg || 14),
+    x, y, z, color,
+    rx: o.rx || 0, ry: o.ry || 0, rz: o.rz || 0,
+    sx: o.sx ?? 1, sy: o.sy ?? 1, sz: o.sz ?? 1,
+  };
+}
+function ring(r, tube, color, x = 0, y = 0, z = 0, o = {}) {
+  return {
+    g: new THREE.TorusGeometry(r, tube, 6, o.seg || 14),
+    x, y, z, color,
+    rx: o.rx ?? Math.PI / 2, ry: o.ry || 0, rz: o.rz || 0,
+    sx: o.sx ?? 1, sy: o.sy ?? 1, sz: o.sz ?? 1,
+  };
+}
+/** Straps, blades and plates, where a flat slab is genuinely the right shape. */
+function slab(w, h, d, x, y, z, color, rx = 0, ry = 0, rz = 0) {
+  return { g: new THREE.BoxGeometry(w, h, d), x, y, z, color, rx, ry, rz, sx: 1, sy: 1, sz: 1 };
 }
 
 /** Merge pieces into one geometry with vertex colours. */
@@ -55,7 +96,7 @@ function merge(pieces) {
     const g = p.g.index ? p.g.toNonIndexed() : p.g;
     _e.set(p.rx, p.ry, p.rz);
     _q.setFromEuler(_e);
-    _m.compose(_v.set(p.x, p.y, p.z), _q, new THREE.Vector3(1, 1, 1));
+    _m.compose(_v.set(p.x, p.y, p.z), _q, new THREE.Vector3(p.sx ?? 1, p.sy ?? 1, p.sz ?? 1));
     g.applyMatrix4(_m);
     if (!g.attributes.normal) g.computeVertexNormals();
     const a = g.attributes.position.array, n = g.attributes.normal.array;
@@ -163,55 +204,65 @@ export class Avatar {
     this.body = new THREE.Object3D();
     this.root.add(this.body);
 
-    /* ---- hips: narrow, with a working belt ---- */
+    /* ---- hips: a turned form, not a box ---- */
     this.hips = joint(this.body, [
-      piece(4.9, 3.0, 3.0, 0, 0, 0, SUIT),
-      piece(5.2, 0.9, 3.3, 0, 1.2, 0, LEATHER),            // belt
-      piece(1.5, 1.1, 0.7, 1.9, 1.2, 1.5, ACC),            // buckle
-      piece(1.3, 1.6, 1.0, -2.0, 0.2, 1.2, LEATHER),       // pouch
-      piece(1.1, 1.4, 0.9, 1.6, -0.1, -1.4, LEATHER),      // rear pouch
+      lathe([[1.3, -1.6], [2.1, -1.0], [2.45, -0.1], [2.35, 0.8], [1.95, 1.5]], SUIT, 0, 0, 0, { sz: 0.82 }),
+      ring(2.3, 0.28, LEATHER, 0, 1.15, 0, { sz: 0.86 }),           // belt
+      slab(1.2, 0.85, 0.45, 1.45, 1.15, 1.35, ACC),                 // buckle
+      capsule(0.5, 0.8, LEATHER, -1.95, 0.1, 0.95, { sz: 0.7 }),    // pouch
+      capsule(0.45, 0.6, LEATHER, 1.6, -0.1, -1.15, { sz: 0.7 }),
     ], this.matBody, 8.7);
 
-    /* ---- chest: tapered, with a rig ---- */
-    // Deliberately lean: a runner, not a tank. Width comes from the pauldron
-    // and the coat, never from the torso itself.
+    /* ---- torso: ONE continuous tapered form, waist to shoulders ---- */
     this.chest = joint(this.hips, [
-      piece(4.7, 4.6, 2.8, 0, 2.5, 0, SUIT),               // ribcage
-      piece(5.2, 1.6, 3.0, 0, 4.6, 0, SUIT),               // upper chest
-      piece(2.3, 1.7, 0.45, 0, 3.1, 1.55, ACC),            // sternum plate
-      piece(3.4, 0.5, 0.4, 0, 1.9, 1.5, LEATHER),          // lower rib strap
-      piece(0.7, 4.4, 0.4, -1.4, 3.0, 1.55, LEATHER, 0, 0, 0.30),  // rig strap
-      piece(0.7, 4.4, 0.4, 1.4, 3.0, 1.55, LEATHER, 0, 0, -0.30),
-      piece(2.6, 2.2, 0.9, 0, 3.4, -1.7, DARK),            // compact back pack
-      piece(0.6, 0.6, 2.0, 0, 4.4, -2.0, TRIM),            // hook mount
+      lathe([
+        [1.85, 0.0], [2.25, 0.9], [2.55, 2.1], [2.7, 3.2],
+        [2.65, 4.2], [2.3, 5.0], [1.45, 5.5],
+      ], SUIT, 0, 0, 0, { sz: 0.76, seg: 16 }),
+      // Chest piece curved to the body instead of a flat plate stuck on it.
+      lathe([[1.35, 2.4], [1.6, 3.1], [1.4, 3.8]], ACC, 0, 0, 1.05, { sz: 0.34, seg: 12 }),
+      slab(0.52, 4.2, 0.26, -1.45, 3.0, 1.2, LEATHER, 0, 0, 0.30),  // rig straps
+      slab(0.52, 4.2, 0.26, 1.45, 3.0, 1.2, LEATHER, 0, 0, -0.30),
+      ring(2.45, 0.15, LEATHER, 0, 1.9, 0, { sz: 0.8 }),
+      capsule(1.05, 1.4, DARK, 0, 3.4, -1.85, { sz: 0.55 }),        // compact pack
+      capsule(0.24, 1.4, TRIM, 0, 4.4, -1.95, { rx: Math.PI / 2 }), // hook mount
     ], this.matBody, 1.4);
 
     if (s.vents) {
       this.vents = [];
       for (let i = 0; i < 3; i++) {
-        const v = new THREE.Mesh(new THREE.BoxGeometry(0.8, 1.8, 0.35), this.matVent);
-        v.position.set(-1.9 + i * 1.9, 3.2, -1.8);
+        const v = new THREE.Mesh(new THREE.CapsuleGeometry(0.28, 1.2, 2, 8), this.matVent);
+        v.position.set(-1.6 + i * 1.6, 3.2, -1.75);
         this.chest.add(v);
         this.vents.push(v);
       }
     }
 
-    /* ---- head: hood + mask, distinct silhouette ---- */
+    /* ---- head: rounded skull under a shaped hood ---- */
     this.neck = joint(this.chest, [
-      piece(2.6, 2.6, 2.6, 0, 1.5, 0, SUIT),               // skull
-      piece(2.9, 1.2, 2.9, 0, 2.6, -0.1, CLOTH),           // hood crown
-      piece(3.2, 2.2, 1.4, 0, 1.6, -1.2, CLOTH),           // hood back
-      piece(2.4, 1.3, 0.6, 0, 0.9, 1.25, DARK),            // face mask
-      piece(0.45, 0.8, 0.45, 1.1, 2.7, -0.7, ACC, 0.5, 0, 0.35),    // topknot tie
-      piece(0.34, 1.9, 0.34, 1.25, 3.2, -1.15, TRIM, 0.9, 0, 0.35),
+      capsule(0.52, 0.5, DARK, 0, 0.35, 0, { sz: 0.9 }),            // neck
+      ball(1.32, SUIT, 0, 1.55, 0.05, { sx: 0.95, sy: 1.12, sz: 1.0 }),   // skull
+      // Hood: a lathe shell that sits over the skull and flares at the back.
+      lathe([[0.7, 2.75], [1.45, 2.1], [1.72, 1.2], [1.68, 0.35], [1.5, -0.1]],
+        CLOTH, 0, 0, -0.15, { sz: 1.12, seg: 14 }),
+      ball(1.1, CLOTH, 0, 1.15, -1.25, { sx: 1.25, sy: 1.15, sz: 0.85 }), // hood fall
+      ball(0.95, DARK, 0, 1.15, 0.72, { sx: 1.05, sy: 0.72, sz: 0.55 }),  // face mask
+      capsule(0.2, 1.5, TRIM, 1.0, 2.5, -0.95, { rx: 0.95, rz: 0.3 }),    // topknot
+      ring(0.32, 0.12, ACC, 0.82, 2.45, -0.5, { rx: 1.1, rz: 0.3 }),      // tie
     ], this.matBody, 5.3);
-    this.visor = new THREE.Mesh(new THREE.BoxGeometry(2.45, 0.55, 0.42), this.matGlow);
-    this.visor.position.set(0, 1.75, 1.35);
+    // Visor: a curved band, not a slab.
+    this.visor = new THREE.Mesh(
+      new THREE.SphereGeometry(1.24, 16, 8, Math.PI * 0.72, Math.PI * 0.56, Math.PI * 0.44, Math.PI * 0.16),
+      this.matGlow,
+    );
+    this.visor.position.set(0, 1.55, 0.05);
+    this.visor.scale.set(0.98, 1.12, 1.04);
     this.neck.add(this.visor);
 
     if (s.lantern) {
-      const lamp = new THREE.Mesh(new THREE.CylinderGeometry(1.7, 1.7, 3.2, 10), this.matGlow);
-      lamp.position.y = 1.6;
+      const lamp = new THREE.Mesh(new THREE.SphereGeometry(1.5, 14, 10), this.matGlow);
+      lamp.position.y = 1.5;
+      lamp.scale.y = 1.15;
       this.neck.add(lamp);
       this.lantern = lamp;
     }
@@ -226,34 +277,47 @@ export class Avatar {
     this.shoulderR = new THREE.Object3D();
     this.shoulderR.position.set(2.75, 0, 0);
     this.swingPivot.add(this.shoulderR);
+    // Curved pauldron: a sphere cap that wraps the shoulder.
     const pauldron = new THREE.Mesh(merge([
-      piece(2.4, 1.5, 2.8, 0.25, 0.25, 0, ACC),
-      piece(2.0, 0.6, 2.4, 0.35, 1.05, 0, TRIM),
+      ball(1.5, ACC, 0.3, 0.15, 0, { sx: 1.0, sy: 0.85, sz: 1.15 }),
+      ring(1.25, 0.16, TRIM, 0.35, 0.55, 0, { rx: 0, rz: Math.PI / 2, sz: 1.1 }),
     ]), this.matBody);
     pauldron.castShadow = true;
     this.shoulderR.add(pauldron);
-    this.armR = joint(this.shoulderR, [piece(1.35, 3.4, 1.35, 0, -1.7, 0, SUIT)], this.matBody);
+    this.armR = joint(this.shoulderR, [
+      capsule(0.66, 2.5, SUIT, 0, -1.7, 0),
+    ], this.matBody);
     this.foreR = joint(this.armR, [
-      piece(1.2, 3.2, 1.2, 0, -1.6, 0, SUIT),
-      piece(1.45, 1.5, 1.45, 0, -2.5, 0, LEATHER),         // bracer
+      ball(0.62, SUIT, 0, 0, 0),                                    // elbow
+      capsule(0.55, 2.3, SUIT, 0, -1.6, 0),
+      capsule(0.68, 1.0, LEATHER, 0, -2.45, 0),                     // bracer
     ], this.matBody, -3.4);
-    this.handR = joint(this.foreR, [piece(1.1, 1.1, 1.3, 0, -0.45, 0.1, DARK)], this.matBody, -3.2);
+    this.handR = joint(this.foreR, [
+      ball(0.52, DARK, 0, -0.42, 0.08, { sx: 0.95, sy: 1.15, sz: 0.8 }),
+    ], this.matBody, -3.2);
 
     // Left side carries the grapple launcher.
     this.shoulderL = new THREE.Object3D();
     this.shoulderL.position.set(-2.75, 4.4, 0);
     this.chest.add(this.shoulderL);
-    const strap = new THREE.Mesh(merge([piece(1.9, 0.9, 2.5, -0.2, 0.3, 0, TRIM)]), this.matBody);
+    const strap = new THREE.Mesh(merge([
+      ball(1.05, TRIM, -0.2, 0.15, 0, { sx: 0.9, sy: 0.8, sz: 1.15 }),
+    ]), this.matBody);
     this.shoulderL.add(strap);
-    this.armL = joint(this.shoulderL, [piece(1.35, 3.4, 1.35, 0, -1.7, 0, SUIT)], this.matBody);
+    this.armL = joint(this.shoulderL, [
+      capsule(0.66, 2.5, SUIT, 0, -1.7, 0),
+    ], this.matBody);
     this.foreL = joint(this.armL, [
-      piece(1.2, 3.2, 1.2, 0, -1.6, 0, SUIT),
-      // grapple launcher: block, spool, muzzle
-      piece(1.7, 1.9, 2.4, -0.15, -2.3, 0.5, DARK),
-      cylPiece(0.75, 0.75, 0.5, 10, -0.15, -2.3, 1.0, TRIM, 0, 0, Math.PI / 2),
-      cylPiece(0.34, 0.34, 1.5, 8, -0.15, -2.9, 1.5, ACC, Math.PI / 2, 0, 0),
+      ball(0.62, SUIT, 0, 0, 0),
+      capsule(0.55, 2.3, SUIT, 0, -1.6, 0),
+      // grapple launcher: a rounded housing, a spool, a muzzle
+      capsule(0.72, 1.3, DARK, -0.12, -2.3, 0.45, { rx: Math.PI / 2, sz: 0.85 }),
+      ring(0.62, 0.2, TRIM, -0.12, -2.3, 0.95, { rx: 0, rz: Math.PI / 2 }),
+      capsule(0.26, 1.0, ACC, -0.12, -2.85, 1.25, { rx: Math.PI / 2 }),
     ], this.matBody, -3.4);
-    this.handL = joint(this.foreL, [piece(1.1, 1.1, 1.3, 0, -0.45, 0.1, DARK)], this.matBody, -3.2);
+    this.handL = joint(this.foreL, [
+      ball(0.52, DARK, 0, -0.42, 0.08, { sx: 0.95, sy: 1.15, sz: 0.8 }),
+    ], this.matBody, -3.2);
     // Muzzle marker: where the cable is drawn from.
     this.muzzle = new THREE.Object3D();
     this.muzzle.position.set(-0.15, -3.6, 2.1);
@@ -268,14 +332,16 @@ export class Avatar {
       hip.position.set(side * 1.45, -1.4, 0);
       this.hips.add(hip);
       const thigh = joint(hip, [
-        piece(1.75, 4.3, 1.75, 0, -2.15, 0, SUIT),
-        piece(1.95, 0.7, 1.95, 0, -3.3, 0, LEATHER),       // thigh strap
+        ball(0.85, SUIT, 0, 0, 0),                                  // hip joint
+        capsule(0.82, 3.1, SUIT, 0, -2.15, 0),
+        ring(0.9, 0.14, LEATHER, 0, -3.25, 0, { sz: 0.9 }),         // thigh strap
       ], this.matBody);
       const shin = joint(thigh, [
-        piece(1.5, 4.0, 1.5, 0, -2.0, 0, DARK),
-        piece(1.7, 1.2, 0.8, 0, -0.35, 0.65, ACC),         // knee pad
-        piece(1.75, 1.6, 1.9, 0, -3.5, 0.15, LEATHER),     // boot upper
-        piece(1.9, 0.6, 3.1, 0, -4.25, 0.55, TRIM),        // sole
+        ball(0.7, DARK, 0, 0, 0),                                   // knee
+        capsule(0.62, 2.9, DARK, 0, -2.0, 0),
+        ball(0.72, ACC, 0, -0.2, 0.5, { sx: 1.1, sy: 0.9, sz: 0.6 }), // knee pad
+        capsule(0.78, 1.0, LEATHER, 0, -3.5, 0.1, { sz: 1.05 }),    // boot upper
+        capsule(0.55, 1.9, TRIM, 0, -4.25, 0.45, { rx: Math.PI / 2, sy: 0.55 }), // sole
       ], this.matBody, -4.3);
       return { hip, thigh, shin };
     };
@@ -290,8 +356,9 @@ export class Avatar {
       for (let i = 0; i < 5; i++) {
         const seg = new THREE.Object3D();
         seg.position.set(0, i === 0 ? 0.5 : 0, i === 0 ? -1.1 : -2.1);
+        // Soft-edged fabric: a flattened capsule reads as cloth, a box does not.
         const mesh = new THREE.Mesh(merge([
-          piece(1.9 - i * 0.24, 0.42, 2.2, 0, 0, -1.1, CLOTH),
+          capsule(0.85 - i * 0.11, 1.9, CLOTH, 0, 0, -1.05, { rx: Math.PI / 2, sz: 0.30 }),
         ]), this.matBody);
         seg.add(mesh);
         parent.add(seg);
@@ -307,7 +374,7 @@ export class Avatar {
         const seg = new THREE.Object3D();
         seg.position.set(i === 0 ? side * 1.5 : 0, i === 0 ? 0.6 : -2.6, i === 0 ? -1.4 : 0);
         const mesh = new THREE.Mesh(merge([
-          piece(2.3 - i * 0.35, 2.8, 0.42, 0, -1.4, 0, CLOTH),
+          capsule(1.05 - i * 0.16, 2.3, CLOTH, 0, -1.4, 0, { sz: 0.24 }),
         ]), this.matBody);
         seg.add(mesh);
         parent.add(seg);
@@ -497,11 +564,14 @@ export class Avatar {
     this.body.rotation.z = this.turnLean + this.wallRoll;
     this.body.position.y = -P.lean * 2.0 - P.crouch * 2.4;
 
-    // Landing squash: a spring, so it recovers smoothly instead of popping.
-    this.landVel += -this.landSquash * 190 * dt;
-    this.landVel *= Math.exp(-12 * dt);
-    this.landSquash += this.landVel * dt;
-    if (Math.abs(this.landSquash) < 0.001) { this.landSquash = 0; this.landVel = 0; }
+    // Landing squash: critically damped, so the body absorbs and returns once
+    // rather than wobbling back up through the pose.
+    {
+      const K = 190, C = 2 * Math.sqrt(190);
+      this.landVel += (-this.landSquash * K - this.landVel * C) * dt;
+      this.landSquash += this.landVel * dt;
+      if (Math.abs(this.landSquash) < 0.001 && Math.abs(this.landVel) < 0.01) { this.landSquash = 0; this.landVel = 0; }
+    }
 
     const bob = Math.sin(ph * 2) * 0.34 * P.bob * this.groundW;
     this.hips.position.y = 8.7 + bob + this.landSquash * 3.2;
@@ -674,10 +744,11 @@ export class Avatar {
     if (this.ghosts) this._updateGhosts(dt);
   }
 
-  /** Called on landing: kicks the squash spring. */
+  /** Called on landing. A normal jump barely registers; a real drop absorbs. */
   land(power) {
-    const t = clamp01(power / 420);
-    this.landVel -= 0.9 + t * 3.4;
+    const t = clamp01((power - 180) / 620);
+    if (t <= 0) return;
+    this.landVel -= 0.5 + t * t * 3.6;
   }
 
   /** Called on a wall kick: a short whole-body recoil away from the surface. */
